@@ -1,92 +1,85 @@
 # E-Commerce & Payments Review
 
-## Objective
+## Status for this repository
 
-Deep-dive audit of all billing, payments, subscriptions, credits, and payment
-processor integration logic. This review covers the **money side** of the
-platform — both revenue (subscriptions, purchases, contributions) and spend
-(API costs, metered usage).
+**Not applicable.** This repository (`core-nexus/autotune`) is a consumer
+install of the claude-code-review system and contains no payments code:
 
-Errors here cost real money or silently give away free service. Treat every
-finding with the gravity that financial code demands.
+- No payment processor integration (Stripe, Paddle, Lemon Squeezy, Braintree, etc.)
+- No webhook handlers (no signature verification, no idempotency layer)
+- No subscription, billing, invoice, or entitlement logic
+- No credit / token / balance accounting
+- No checkout, pricing, currency, or money math
+- No customer / user / account model
+- No database, no persisted state of any kind
 
-## Review Checklist
+The previous full e-commerce review (issue item 11, 2026-05-03) confirmed
+this and returned `MAXIMUM_FIX_PRIORITY:NONE`. The codebase has not gained
+any payments surface area since.
 
-### Webhook Integrity
+## Instructions for the reviewer
 
-- [ ] Every webhook handler verifies the payment processor's signature before processing
-- [ ] Idempotency: duplicate webhook events (same event ID) are detected and
-      skipped without side effects
-- [ ] All expected event types are handled; unexpected types are logged, not
-      silently dropped
-- [ ] Webhook handlers access the correct fields from the event payload
-- [ ] Checkout/payment completion correctly provisions what was purchased
-- [ ] Subscription lifecycle events correctly update local subscription records
-- [ ] Invoice/payment events correctly grant entitlements with idempotency
-- [ ] No race conditions between concurrent webhook deliveries for the same user
+1. **Spot-check** that no e-commerce code has been introduced since the
+   last review. From the repo root, run:
 
-### Subscription Logic
+   ```bash
+   grep -r -l -i -E 'stripe|paddle|braintree|lemonsqueez|webhook|subscription|invoice|checkout|entitlement|billing' \
+     --exclude-dir=.git \
+     --include='*.js' --include='*.ts' --include='*.py' --include='*.go' \
+     --include='*.rb' --include='*.java' --include='*.kt' --include='*.rs' \
+     --include='*.cs' --include='*.php' --include='*.sql' --include='*.json' \
+     --include='*.yml' --include='*.yaml' --include='*.toml' \
+     2>/dev/null
+   ```
 
-- [ ] Subscription state transitions are correct:
-  - New subscription → active
-  - Upgrade/downgrade mid-cycle → correct tier, correct entitlement adjustment
-  - Cancel at period end → still active until period end, then expires
-  - Renewal → new period, entitlements granted
-  - Payment failure → correct state (past_due, not prematurely canceled)
-- [ ] Trial expiration detection works correctly
-- [ ] Entitlement grants are idempotent (cannot double-grant for the same period)
-- [ ] Mid-cycle upgrade grants calculate the correct difference
-- [ ] Feature gating checks the correct subscription tier and status
-- [ ] Free tier users get correct defaults and limits
+   If the only matches are inside `.github/review-prompts/` (review prompt
+   text itself) or `README.md` (documentation), proceed to step 2.
 
-### Credit / Token System (if applicable)
+2. **Create a clean issue.** Title:
+   `review(e-commerce): clean — YYYY-MM-DD`. Body should briefly note that
+   the spot-check confirmed no payments code, link back to issue item 11
+   for the full prior analysis, and end with the priority line.
 
-- [ ] Credit/token balance can never go below the configured minimum
-- [ ] Balance caps or rollover limits are correctly enforced
-- [ ] Deductions are atomic — no scenario where credits are consumed but
-      the operation fails, or vice versa
-- [ ] Every deduction creates a matching transaction record for audit
-- [ ] Balance queries return consistent results (not stale or partially updated)
-- [ ] Auto top-up (if implemented) triggers correctly and doesn't loop
+3. **End the issue body with exactly:**
 
-### Cost Calculation
+   ```
+   MAXIMUM_FIX_PRIORITY:NONE
+   ```
 
-- [ ] Pricing lookups resolve the correct price for the item/service
-- [ ] Currency conversions are correct (no off-by-100 or rounding errors)
-- [ ] Fallback pricing doesn't silently undercharge or overcharge
-- [ ] Insufficient-funds/credits checks happen BEFORE the operation, not after
+4. Close the issue immediately after creating it.
 
-### Checkout & Payment Flows
+If step 1 *does* find new payments code (i.e. this repo has gained a real
+payments surface), discard this stub and perform the full audit using the
+canonical e-commerce checklist from
+[claude-code-review](https://github.com/core-nexus/claude-code-review/blob/main/.github/review-prompts/e-commerce.md):
+webhook integrity, subscription state machine, credit atomicity, cost
+calculation, checkout flows, data consistency, currency/integer math, and
+the standard severity guide. Then notify maintainers that this stub
+should be replaced with the full checklist.
 
-- [ ] Checkout session creation includes all required parameters
-- [ ] Price IDs match the correct product and interval
-- [ ] Success/cancel URLs are correct and don't leak session data
-- [ ] Rate limiting on checkout creation is correctly enforced
-- [ ] Payment method updates propagate to the correct customer record
-- [ ] Card decline and payment errors surface to the user (not swallowed)
+## Why this file is a stub
 
-### Data Consistency
+Per the project's own README ("Configuration → Remove Irrelevant Review
+Areas"), repos with no payments should remove this area entirely:
 
-- [ ] Customer ID is set on the user record before any API call that requires it
-- [ ] Subscription records in the database match the payment processor's state
-- [ ] Credit/balance on the user record matches the sum of all transactions
-      (or has a reconciliation mechanism)
-- [ ] Rate limit records are cleaned up and don't accumulate unboundedly
+> **No payments?** Delete `e-commerce.md` and remove `e-commerce` from
+> the workflow_dispatch options and `ALL_AREAS` in `resolve-review-area.sh`
 
-### Currency & Math
+Fully removing the area requires editing `.github/workflows/codebase-review.yml`
+and `.github/workflows/scripts/resolve-review-area.sh`, both of which sit
+under `.github/workflows/` and therefore require the GitHub `workflows`
+permission to push. The automated fix workflow's token does not hold that
+permission, so it cannot land those edits. A maintainer should complete
+the cleanup in a follow-up by:
 
-- [ ] All monetary values use integers (cents/smallest unit), never floating-point
-- [ ] No floating-point arithmetic on monetary amounts
-- [ ] Rounding is explicit and consistent (platform's favor for billing,
-      user's favor for credits granted)
-- [ ] Currency is consistently handled (no mixed-currency assumptions)
+1. Deleting this file.
+2. Removing the `e-commerce` entry from `workflow_dispatch.inputs.review_area.options`
+   in `.github/workflows/codebase-review.yml`.
+3. Removing `"e-commerce"` from `ALL_AREAS` in
+   `.github/workflows/scripts/resolve-review-area.sh`.
+4. Optionally removing the `e-commerce` row from the review-areas table
+   in `README.md`.
 
-## Severity Guide
-
-- **CRITICAL**: User charged wrong amount, entitlements granted incorrectly,
-  double billing, webhook bypass allowing free service
-- **HIGH**: Subscription state machine bug, missing idempotency allowing double
-  grants, auto top-up loop, checkout race condition
-- **MEDIUM**: Stale subscription data displayed, rate limit bypassable,
-  cost calculation off for rare cases
-- **LOW**: Minor audit trail gaps, cosmetic billing display issues
+Until that happens, this stub keeps the weekly scheduled e-commerce
+review cheap (a single grep + a clean issue) instead of the full
+multi-section deep-dive against criteria that have nothing to evaluate.
