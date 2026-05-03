@@ -30,7 +30,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+Every **Sunday at 06:00 UTC**, all areas are dispatched together. By default, up to 3 run concurrently (controlled by `max-parallel` in `codebase-review.yml`); the rest queue until a slot frees up. You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
