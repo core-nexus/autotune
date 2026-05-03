@@ -1,0 +1,16 @@
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..f310700 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -13,7 +13,10 @@ set -euo pipefail
+ 
+ PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+   --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
+-  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
++  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' \
++  | tail -1 || echo "NONE")
++
++PRIORITY="${PRIORITY:-NONE}"
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"

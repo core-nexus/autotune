@@ -1,0 +1,102 @@
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..17bca85 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -68,8 +68,9 @@ jobs:
+       max-parallel: 3
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+-    outputs:
+-      priority: ${{ steps.extract-priority.outputs.priority }}
++    # Per-area priority is shared with the fix job via an artifact, not a
++    # job-level output: matrix jobs collapse `outputs.*` to a single value
++    # (last writer wins) regardless of which variant produced it.
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+@@ -172,13 +173,28 @@ jobs:
+           REPO: ${{ github.repository }}
+         run: .github/workflows/scripts/extract-review-priority.sh
+ 
+-  # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
++      - name: Persist priority for fix gate
++        run: |
++          mkdir -p /tmp/priority
++          printf '%s' '${{ steps.extract-priority.outputs.priority }}' > /tmp/priority/priority.txt
++
++      - name: Upload priority artifact
++        uses: actions/upload-artifact@v4
++        with:
++          name: review-priority-${{ matrix.area }}
++          path: /tmp/priority/priority.txt
++          retention-days: 1
++          if-no-files-found: error
++
++  # ─── Stage 2: Fix (gated per-area on the review priority artifact) ─────────
++  # The matrix runs for every area whose review succeeded; the per-area gate
++  # step exits early when the priority is below MEDIUM. This avoids the broken
++  # job-level-output approach where a matrix collapses outputs to one value.
+   fix:
+     needs: [determine-area, review]
+     if: |
+       always() &&
+-      needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
++      needs.review.result == 'success'
+     runs-on: ubuntu-latest
+     timeout-minutes: 90
+     permissions:
+@@ -193,12 +209,35 @@ jobs:
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+     steps:
++      - name: Download priority artifact
++        uses: actions/download-artifact@v4
++        with:
++          name: review-priority-${{ matrix.area }}
++          path: /tmp/priority
++
++      - name: Evaluate fix gate
++        id: gate
++        run: |
++          set -euo pipefail
++          PRIORITY=$(tr -d '[:space:]' < /tmp/priority/priority.txt)
++          PRIORITY="${PRIORITY:-NONE}"
++          echo "Priority for ${{ matrix.area }}: ${PRIORITY}"
++          echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
++          if [[ "${PRIORITY}" = "HIGH" || "${PRIORITY}" = "MEDIUM" ]]; then
++            echo "proceed=true" >> "${GITHUB_OUTPUT}"
++          else
++            echo "proceed=false" >> "${GITHUB_OUTPUT}"
++            echo "::notice::Skipping fix for ${{ matrix.area }} (priority: ${PRIORITY})"
++          fi
++
+       - name: Checkout repository
++        if: steps.gate.outputs.proceed == 'true'
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Fix review findings — ${{ matrix.area }}
++        if: steps.gate.outputs.proceed == 'true'
+         uses: anthropics/claude-code-action@v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+@@ -211,7 +250,7 @@ jobs:
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ steps.gate.outputs.priority }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+@@ -285,7 +324,7 @@ jobs:
+ 
+       # Trigger CI on the new PR branch (customize workflow names for your project)
+       - name: Trigger CI workflows
+-        if: success()
++        if: success() && steps.gate.outputs.proceed == 'true'
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
