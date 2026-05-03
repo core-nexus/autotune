@@ -249,6 +249,93 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Data Flow & Third-Party Processing
+
+This system is itself an AI tool. Before installing it, you and your security
+or compliance team should understand exactly what is sent to the third-party
+model provider on each run.
+
+**Recipient.** All inference calls are made to [Anthropic](https://www.anthropic.com/)
+via the Claude Code action. Claude is a general-purpose AI assistant operated
+by Anthropic; this repo does not host or run any model.
+
+**What is transmitted on every run.** The Claude Code action gives the model
+access to the GitHub Actions runner. In the course of running a review, the
+model can and typically will read:
+
+- the entire content of the repository at the checked-out commit, including
+  any code, configuration, documentation, and test fixtures;
+- the diff of every PR being reviewed (for the PR-review workflow);
+- the title, body, and comments of related issues and PRs;
+- CI workflow logs that the action chooses to fetch.
+
+If a secret is accidentally committed (e.g. an `.env` file) it will be read
+along with everything else. Keep your `.gitignore` and pre-commit hooks honest.
+
+**Recommendations before installation.**
+
+1. Read Anthropic's [data usage policy](https://www.anthropic.com/legal/privacy)
+   and the [commercial terms](https://www.anthropic.com/legal/commercial-terms)
+   for the Claude Code product to confirm whether your usage tier is excluded
+   from training-data collection.
+2. If you handle regulated data (PHI, PCI, regulated PII), get sign-off from
+   your privacy/legal function and update your DPIA / vendor-risk register
+   before enabling. The full repository content is in scope for what is
+   transmitted.
+3. Update your privacy notice and any internal data-flow diagrams to include
+   "source code & repo metadata → Anthropic" if you ship product code through
+   this system.
+4. If your repository is private, double-check that `CLAUDE_CODE_OAUTH_TOKEN`
+   is configured against an Anthropic account whose data-handling posture
+   matches your requirements.
+
+The system itself is risk-classified as **minimal / limited risk** under the
+EU AI Act: it interacts only with developers, does not perform biometric
+identification, profiling of natural persons, or any Annex III high-risk
+use case. The transparency obligation that applies (Art. 50) is met by the
+`claude[bot]` author identity on issues/PRs and by the AI-generation footer
+appended to every issue, PR description, and review comment the system emits.
+
+## Known Limitations
+
+This system is an AI tool and inherits the limitations of the underlying
+language model. Adopters should keep the following in mind:
+
+- **No formal bias audit.** The reviewer has not been audited for bias on any
+  particular dimension. Reviews of code for niche frameworks, less-common
+  programming languages, or domain-specific DSLs may be less reliable than
+  reviews of mainstream stacks well-represented in training data.
+- **Training-distribution skew.** The reviewer will tend to recommend patterns
+  common in its training data. If your codebase deliberately diverges from
+  industry norms (custom build systems, unusual architectural choices, in-house
+  abstractions), expect the reviewer to occasionally recommend changes that
+  conflict with project conventions. A `CLAUDE.md` at the repo root mitigates
+  this — the workflow reads and respects it.
+- **Auto-closure of prior reviews can drop coverage.** Each weekly run closes
+  the prior issue/PR for the same review area. The system attempts to record
+  which prior findings are carried forward and which are not (see the auto-
+  closure prompt in `codebase-review.yml`), but a model lapse could still cause
+  a real finding from a prior run to be silently dropped. Treat any `Superseded
+  by ...` comment as worth reviewing before closing-time.
+- **Priority extraction may default to NONE on parse failure.** The fix stage
+  only triggers when the priority is MEDIUM or HIGH. If the model emits a
+  malformed `MAXIMUM_FIX_PRIORITY` line, the extractor scripts default to NONE
+  and emit a `::warning::` annotation. Audit the workflow run summary if you
+  expect findings but no fix PR appeared.
+- **Stylistic-but-semantically-incorrect fixes.** The fix stage may produce
+  diffs that read well and pass linters/tests but introduce subtle behavioural
+  changes. This is the single biggest reason every auto-fix PR must be reviewed
+  by a human under branch protection before merge — never enable auto-merge.
+- **Cost is bounded by your Anthropic quota.** A misbehaving prompt or a model
+  that decides to read large numbers of files can run up real spend. Set
+  budgets/alerts on the Anthropic side.
+- **Documentation freshness.** The review prompts in `.github/review-prompts/`
+  cite specific articles, frameworks, and laws (e.g. EU AI Act Art. 50). These
+  citations are the state of the law at the time the prompt was last updated;
+  the reviewer is also instructed to do its own pre-review web search, but
+  treat any legal citation surfaced in a review as a *pointer to verify*, not
+  authoritative legal advice.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:

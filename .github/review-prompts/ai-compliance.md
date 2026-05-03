@@ -29,20 +29,27 @@ Incorporate your findings into the review.
   - **Limited risk**: Chatbots, content recommendation, content generation
   - **Minimal risk**: Spam filters, search ranking
 
-#### Transparency Requirements (Art. 52)
+#### Transparency Requirements (Art. 50)
 
-- [ ] AI-generated content is clearly labeled as such
-- [ ] Users know when they are interacting with an AI system
+Note: in the final adopted text of the EU AI Act, the transparency obligations
+that earlier drafts placed in Article 52 were renumbered to **Article 50**.
+Article 52 in the final text covers the procedure for designating GPAI models
+as having systemic risk. Cite Article 50 for interaction & content disclosure.
+
+- [ ] AI-generated content is clearly labeled as such (Art. 50(2))
+- [ ] Users know when they are interacting with an AI system (Art. 50(1))
 - [ ] AI-assisted decisions are disclosed (e.g., content ranking, recommendations)
-- [ ] Deepfake/synthetic content detection or labeling if applicable
+- [ ] Deepfake/synthetic content detection or labeling if applicable (Art. 50(4))
 
 #### General Purpose AI (GPAI) Model Use
 
 - [ ] If using third-party AI models:
   - Document which models are used and for what purpose
-  - Ensure model providers comply with GPAI obligations
+  - Ensure model providers comply with GPAI obligations (in force since
+    2 August 2025; enforcement powers from 2 August 2026)
   - Technical documentation of model capabilities and limitations
 - [ ] AI-generated content is distinguishable from human content
+- [ ] For GPAI models with systemic risk, check Art. 52 designation procedure
 
 ### Algorithmic Transparency
 
