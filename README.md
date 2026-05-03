@@ -249,6 +249,42 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Security Considerations
+
+The Claude jobs run with `--dangerously-skip-permissions`, which lets Claude
+run any shell command without prompting. The `fix` jobs additionally have
+`contents: write`, `pull-requests: write`, and `issues: write` and have access
+to a long-lived `CLAUDE_CODE_OAUTH_TOKEN` tied to a user account. Treat these
+workflows accordingly:
+
+- **Public repos must restrict slash commands.** This repo's
+  `claude-pr-review.yml` already gates `/claude-review` and `/claude-fix` on
+  `author_association ∈ {OWNER, MEMBER, COLLABORATOR}`. Keep that gate. Without
+  it any GitHub user could spend the OAuth token or trigger the write-permissioned
+  fix job by posting a comment.
+- **Fork PRs are intentionally not auto-reviewed.** The `pull_request` trigger
+  only fires for in-repo branches (the `if:` checks
+  `head.repo.full_name == github.repository`). Do **not** switch to
+  `pull_request_target` without re-evaluating prompt-injection exposure —
+  `pull_request_target` runs in the context of the default branch with full
+  secrets, which would turn any attacker-controlled diff into code execution.
+- **Prompt injection is a real risk.** PR diffs, descriptions, comments, and
+  issue bodies can be attacker-controlled. The prompts include explicit
+  "untrusted input" sections, but treat that as defense-in-depth. For higher
+  assurance, add `step-security/harden-runner` with an egress allowlist so a
+  successful injection cannot exfiltrate the OAuth token.
+- **Priority comments are bot-only.** The `extract-*-priority.sh` scripts
+  only honor `MAXIMUM_FIX_PRIORITY` markers in comments / issues authored by
+  Bot accounts. Do not relax this filter.
+- **Pin third-party actions by SHA.** This repo pins `actions/checkout` and
+  `anthropics/claude-code-action` to commit SHAs, with the major-version tag
+  in a trailing comment. Use Dependabot to keep the pins fresh — do not
+  switch back to floating major-version tags.
+- **Audit failures.** The default `notify` job creates a GitHub issue
+  labelled `auto-review-failure` when the review or fix job fails. Watch
+  that label, or replace the step with a Slack / PagerDuty integration as
+  shown above.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
