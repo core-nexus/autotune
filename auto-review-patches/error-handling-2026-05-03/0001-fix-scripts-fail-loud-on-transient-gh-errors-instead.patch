@@ -1,0 +1,171 @@
+From fb5dafcb990ccf207d0a526e2c35f5cbc1bd6f7a Mon Sep 17 00:00:00 2001
+From: "claude[bot]" <41898282+claude[bot]@users.noreply.github.com>
+Date: Sun, 3 May 2026 07:47:04 +0000
+Subject: [PATCH 1/2] fix(scripts): fail loud on transient gh errors instead of
+ defaulting silently
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The three workflow scripts share a "Hider" anti-pattern: every failure mode
+of `gh` (auth, rate limit, network blip, 5xx, missing permission) was
+swallowed by `2>/dev/null` and mapped to a benign default — `NONE` for the
+priority extractors, `Skipped: not found` for the CI trigger. A transient
+API blip silently demotes a real review to "no fix needed" and the fix
+stage is skipped without anyone noticing.
+
+Changes:
+
+extract-pr-review-priority.sh (review issue item 1):
+  - Drop `2>/dev/null`; capture stderr into a temp log.
+  - Fail the step on `gh api` non-zero exit. Reserve the `NONE` default
+    for the legitimate case of an API success with no MAXIMUM_FIX_PRIORITY
+    token in any comment.
+  - Add 3-attempt retry with exponential backoff (1s/2s) for transient
+    failures (item 7 — read-only call, idempotent).
+
+extract-review-priority.sh (items 2 and 7):
+  - Same shape: drop `2>/dev/null`, fail loudly on API error, retry transient
+    failures. Keep `|| true` only on the grep — a missing token is
+    genuinely "no priority found".
+
+trigger-ci-workflows.sh (item 3):
+  - Capture stderr and the exit code; distinguish 404 ("workflow not found"
+    — benign skip, the default WORKFLOWS list speculatively probes common
+    names) from every other error (auth, network, 5xx) which now exits
+    non-zero with the original error message.
+
+Verified with shellcheck (clean) and `bash -n` (syntax OK).
+
+Refs: review(error-handling): findings — 2026-05-03 (item 1, item 2,
+item 3, item 7)
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ .../scripts/extract-pr-review-priority.sh     | 25 ++++++++++++-
+ .../scripts/extract-review-priority.sh        | 37 +++++++++++++++----
+ .../workflows/scripts/trigger-ci-workflows.sh | 22 ++++++++++-
+ 3 files changed, 72 insertions(+), 12 deletions(-)
+
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..a95ddda 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -11,8 +11,29 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR_NUMBER:?}"
+ 
+-PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+-  --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
++# Retry transient failures (5xx, network blips, rate limits) up to 3 times
++# with exponential backoff. Read-only API call, so retry is safe.
++attempts=3
++err_log=$(mktemp)
++trap 'rm -f "${err_log}"' EXIT
++
++for (( attempt=1; attempt<=attempts; attempt++ )); do
++  if BODY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
++       --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' \
++       2>"${err_log}"); then
++    break
++  fi
++  if (( attempt == attempts )); then
++    echo "ERROR: gh api failed after ${attempts} attempts while reading PR comments for ${REPO}#${PR_NUMBER}" >&2
++    cat "${err_log}" >&2
++    exit 1
++  fi
++  sleep $(( 2 ** (attempt - 1) ))
++done
++
++# Reserve the NONE default for the legitimate case where the API call
++# succeeded but no MAXIMUM_FIX_PRIORITY token was present in any comment.
++PRIORITY=$(printf '%s' "${BODY}" \
+   | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..6d7e1be 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -25,16 +25,37 @@ else
+   echo "No execution file found at: ${EXECUTION_FILE:-<unset>}"
+ fi
+ 
+-# Method 2 (fallback): list recent issues via REST API
++# Method 2 (fallback): list recent issues via REST API.
++# Only fall back if Method 1 produced no priority. A failure of the API call
++# here MUST fail the step loudly — otherwise a transient outage silently maps
++# to "no fix needed" (the "Hider" anti-pattern) and the fix stage is skipped.
+ if [[ -z "${PRIORITY}" ]]; then
+   echo "Falling back to gh issue list..."
+-  BODY=$(gh issue list \
+-    --repo "${REPO}" \
+-    --state all --limit 10 \
+-    --json title,body \
+-    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
+-    2>/dev/null || true)
+-  PRIORITY=$(echo "${BODY}" \
++
++  # Retry transient failures up to 3 times with exponential backoff.
++  attempts=3
++  err_log=$(mktemp)
++  trap 'rm -f "${err_log}"' EXIT
++
++  for (( attempt=1; attempt<=attempts; attempt++ )); do
++    if BODY=$(gh issue list \
++         --repo "${REPO}" \
++         --state all --limit 10 \
++         --json title,body \
++         --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
++         2>"${err_log}"); then
++      break
++    fi
++    if (( attempt == attempts )); then
++      echo "ERROR: gh issue list failed after ${attempts} attempts for ${REPO} (area: ${REVIEW_AREA})" >&2
++      cat "${err_log}" >&2
++      exit 1
++    fi
++    sleep $(( 2 ** (attempt - 1) ))
++  done
++
++  # `|| true` only on the grep — a missing token is genuinely "no priority found".
++  PRIORITY=$(printf '%s' "${BODY}" \
+     | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
+   echo "Extracted from issue list: ${PRIORITY:-<empty>}"
+ fi
+diff --git a/.github/workflows/scripts/trigger-ci-workflows.sh b/.github/workflows/scripts/trigger-ci-workflows.sh
+index 0bb1846..0516278 100755
+--- a/.github/workflows/scripts/trigger-ci-workflows.sh
++++ b/.github/workflows/scripts/trigger-ci-workflows.sh
+@@ -20,8 +20,26 @@ set -euo pipefail
+ WORKFLOWS="${WORKFLOWS:-ci.yml checks.yml test.yml}"
+ 
+ echo "Triggering CI workflows on branch: ${BRANCH}"
++
++# Track whether any non-404 error occurred so the step can fail loudly.
++# 404 ("workflow not found") is treated as a benign skip — the script's
++# default WORKFLOWS list speculatively probes common names. Every other
++# error (auth, network, permissions, branch-protection, 5xx) is surfaced.
++had_unexpected_error=0
++
+ for workflow in ${WORKFLOWS}; do
+   echo "  -> ${workflow}"
+-  gh workflow run "${workflow}" --ref "${BRANCH}" --repo "${REPO}" 2>/dev/null \
+-    || echo "  Skipped: ${workflow} (not found or not dispatchable)"
++  if err=$(gh workflow run "${workflow}" --ref "${BRANCH}" --repo "${REPO}" 2>&1); then
++    echo "  Triggered: ${workflow}"
++  elif printf '%s' "${err}" | grep -q -i -E '404|not found|could not find'; then
++    echo "  Skipped: ${workflow} (not found in ${REPO})"
++  else
++    echo "  ERROR: ${workflow}: ${err}" >&2
++    had_unexpected_error=1
++  fi
+ done
++
++if (( had_unexpected_error )); then
++  echo "ERROR: one or more workflow_dispatch calls failed with a non-404 error" >&2
++  exit 1
++fi
+-- 
+2.53.0
+

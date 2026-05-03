@@ -1,0 +1,208 @@
+From adb834a133dd8f31cd763de58ad165a736c6ddf9 Mon Sep 17 00:00:00 2001
+From: "claude[bot]" <41898282+claude[bot]@users.noreply.github.com>
+Date: Sun, 3 May 2026 07:47:22 +0000
+Subject: [PATCH 2/2] fix(workflows): real failure notifications for both
+ review pipelines
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The shipped `notify` job in codebase-review.yml only emitted a
+`::warning::` annotation visible to whoever happens to navigate to the
+run page — no issue, no Slack, no email. Combined with two condition
+gaps, the result violated the checklist's CI/CD bullet ("All scheduled
+cron CI workflows notify the team on failure"): the most likely failure
+modes silently bypassed the alert path. claude-pr-review.yml had no
+notify job at all, so a /claude-fix that errored out left the
+requesting human waiting with zero signal back.
+
+codebase-review.yml — notify job (review items 4 and 5):
+  - Replace the no-op echo step with one that opens (or comments on)
+    a tracking GitHub issue, using only the built-in GITHUB_TOKEN.
+    No extra secrets required; lands in the same issues UI as review
+    findings; suppressible by users who prefer Slack (README still
+    documents the swap).
+  - Add `determine-area` to `needs:`. Previously a determine-area
+    failure left `review`/`fix` as `skipped`, which the old condition
+    (only checking `failure`) silently swallowed.
+  - Broaden condition to also fire on `cancelled` results — review
+    timeouts (likely failure mode for a Claude API call) report
+    `cancelled`, not `failure`, and previously bypassed the alert.
+  - De-duplicate repeat failures: search for an existing open issue
+    with the `workflow-failure` label and comment instead of opening
+    a new one.
+
+claude-pr-review.yml — new notify job (item 6):
+  - Mirror the codebase-review fix: post a single PR comment when
+    either upstream job fails or is cancelled. Workflow already has
+    `pull-requests: write`, so no new permissions needed.
+  - Comment links to the run logs and reminds the user how to
+    re-trigger via /claude-review or /claude-fix.
+
+Verified with `python3 -c "import yaml; yaml.safe_load(...)"` and
+`bash -n` on the extracted run-block contents.
+
+Refs: review(error-handling): findings — 2026-05-03 (item 4, item 5,
+item 6)
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ .github/workflows/claude-pr-review.yml | 42 ++++++++++++
+ .github/workflows/codebase-review.yml  | 90 ++++++++++++++++++++++----
+ 2 files changed, 121 insertions(+), 11 deletions(-)
+
+diff --git a/.github/workflows/claude-pr-review.yml b/.github/workflows/claude-pr-review.yml
+index ed8bdcc..8733263 100644
+--- a/.github/workflows/claude-pr-review.yml
++++ b/.github/workflows/claude-pr-review.yml
+@@ -239,3 +239,45 @@ jobs:
+             1. You read the review and fixed every finding rated LOW or above
+             2. You pushed code fixes (not reviews or comments)
+             3. ALL CI checks are green
++
++  # ─── Notify on failure ─────────────────────────────────────────────────────
++  # Posts a single PR comment if either upstream job fails or is cancelled
++  # (e.g. timeout). Without this, a /claude-fix request that errors out
++  # silently leaves the requesting human waiting with no signal back.
++  notify:
++    needs: [review, fix-review-issues]
++    if: |
++      always() && (
++        needs.review.result == 'failure' ||
++        needs.review.result == 'cancelled' ||
++        needs.fix-review-issues.result == 'failure' ||
++        needs.fix-review-issues.result == 'cancelled'
++      )
++    runs-on: ubuntu-latest
++    permissions:
++      pull-requests: write
++    steps:
++      - name: Comment on PR about failure
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPO: ${{ github.repository }}
++          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
++          REVIEW_RESULT: ${{ needs.review.result }}
++          FIX_RESULT: ${{ needs.fix-review-issues.result }}
++          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++        run: |
++          set -euo pipefail
++
++          BODY=$(cat <<EOF
++          ⚠️ Claude PR review workflow failed.
++
++          - **Run:** ${RUN_URL}
++          - **review job:** ${REVIEW_RESULT}
++          - **fix-review-issues job:** ${FIX_RESULT}
++
++          Check the run logs for details. You can re-trigger by commenting
++          \`/claude-review\` or \`/claude-fix\`.
++          EOF
++          )
++
++          gh pr comment "${PR_NUMBER}" --repo "${REPO}" --body "${BODY}"
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..9025384 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -293,18 +293,86 @@ jobs:
+           export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
+           .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+-  # ─── Notify on failure (configure your notification channel) ────────────────
++  # ─── Notify on failure ─────────────────────────────────────────────────────
++  # Opens (or updates) a tracking GitHub issue when any upstream job fails or
++  # is cancelled (e.g. timeout). Uses the built-in GITHUB_TOKEN, no secrets
++  # required. The README documents how to swap in Slack instead if preferred.
++  #
++  # Watches all three upstream jobs:
++  #   - determine-area: failure here causes review/fix to be `skipped`, which
++  #     the previous condition (only checking 'failure') silently swallowed.
++  #   - review / fix: timeouts surface as `cancelled`, not `failure` — both
++  #     must be treated as failures for the notification to fire.
+   notify:
+-    needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    needs: [determine-area, review, fix]
++    if: |
++      always() && github.event_name != 'pull_request' && (
++        needs.determine-area.result == 'failure' ||
++        needs.determine-area.result == 'cancelled' ||
++        needs.review.result == 'failure' ||
++        needs.review.result == 'cancelled' ||
++        needs.fix.result == 'failure' ||
++        needs.fix.result == 'cancelled'
++      )
+     runs-on: ubuntu-latest
++    permissions:
++      issues: write
+     steps:
+-      - name: Notify on failure
++      - name: Open or update failure-tracking issue
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPO: ${{ github.repository }}
++          DETERMINE_RESULT: ${{ needs.determine-area.result }}
++          REVIEW_RESULT: ${{ needs.review.result }}
++          FIX_RESULT: ${{ needs.fix.result }}
++          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++          EVENT_NAME: ${{ github.event_name }}
++          REVIEW_AREA: ${{ inputs.review_area || 'scheduled' }}
+         run: |
+-          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
+-          echo ""
+-          echo "To add Slack notifications, replace this step with:"
+-          echo "  uses: slackapi/slack-github-action@v3.0.1"
+-          echo "  with:"
+-          echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+-          echo "    webhook-type: incoming-webhook"
++          set -euo pipefail
++
++          TITLE="codebase-review workflow failed — $(date -u +%Y-%m-%d)"
++          BODY=$(cat <<EOF
++          The automated codebase-review workflow failed.
++
++          - **Run:** ${RUN_URL}
++          - **Trigger:** ${EVENT_NAME}
++          - **Area:** ${REVIEW_AREA}
++          - **determine-area:** ${DETERMINE_RESULT}
++          - **review:** ${REVIEW_RESULT}
++          - **fix:** ${FIX_RESULT}
++
++          Open the run for full logs. This issue was opened automatically by
++          the workflow's notify job. Close it once the underlying problem is
++          investigated; subsequent failures will reopen or update it.
++          EOF
++          )
++
++          # Find an existing open tracking issue (label: workflow-failure) so
++          # repeated failures don't spam new issues.
++          existing=$(gh issue list \
++            --repo "${REPO}" \
++            --state open \
++            --label workflow-failure \
++            --search "codebase-review workflow failed in:title" \
++            --json number \
++            --jq '.[0].number // empty')
++
++          # Ensure the label exists (idempotent — ignore "already exists" error).
++          gh label create workflow-failure \
++            --repo "${REPO}" \
++            --description "Automated workflow failure tracking" \
++            --color "B60205" 2>/dev/null || true
++
++          if [[ -n "${existing}" ]]; then
++            gh issue comment "${existing}" --repo "${REPO}" --body "${BODY}"
++            echo "Updated existing failure-tracking issue #${existing}"
++          else
++            gh issue create \
++              --repo "${REPO}" \
++              --title "${TITLE}" \
++              --label workflow-failure \
++              --body "${BODY}"
++          fi
++
++          echo "::warning::Codebase review workflow failed. determine-area: ${DETERMINE_RESULT}, review: ${REVIEW_RESULT}, fix: ${FIX_RESULT}"
+-- 
+2.53.0
+
