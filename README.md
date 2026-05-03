@@ -1,6 +1,8 @@
-# Claude Code Review
+# Autotune
 
 Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 12 focus areas, finds issues, and auto-fixes them via pull requests.
+
+> Repo name: `autotune`. Earlier drafts referred to this project as "Claude Code Review"; the canonical name is now Autotune.
 
 ## What It Does
 
@@ -30,7 +32,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All reviews are scheduled for **Sunday at 06:00 UTC** and run with a parallelism cap of 3, so the 12 areas execute in waves rather than all at once (wall-clock ~2 hours). You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -46,9 +48,9 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 ---
 
 ```
-Install the claude-code-review system from https://github.com/core-nexus/claude-code-review into this repository. Here's what to do:
+Install the autotune system from https://github.com/core-nexus/autotune into this repository. Here's what to do:
 
-1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
+1. Clone or fetch the review system files from https://github.com/core-nexus/autotune
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
    - .github/review-prompts/  (all 12 .md files)
@@ -162,7 +164,8 @@ Sunday 06:00 UTC (or manual trigger)
 ┌─────────────────────────────────────┐
 │  STAGE 1: REVIEW (30 min timeout)   │
 │                                     │
-│  For each review area (in parallel):│
+│  For each review area (max 3 at     │
+│  a time, via matrix max-parallel):  │
 │  1. Read CLAUDE.md + review prompt  │
 │  2. Deep-dive audit of codebase     │
 │  3. Create GitHub issue with        │
@@ -202,7 +205,19 @@ PR opened / ready for review / /claude-review comment
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
+
+Direct trigger: /claude-fix comment skips Stage 1 and goes
+straight to Stage 2 on the current PR.
 ```
+
+#### Slash commands
+
+- `/claude-review` — Comment this on any PR to (re-)run Stage 1
+  (review). The fix stage runs automatically afterward if the
+  review priority is LOW or higher.
+- `/claude-fix` — Comment this on any PR to skip review and run
+  Stage 2 (fix) directly against the latest review comment. Useful
+  when the review is already posted and you want to retry the fix.
 
 ### Priority Levels
 
@@ -213,6 +228,11 @@ PR opened / ready for review / /claude-review comment
 | LOW | Minor issues | PR review: yes. Codebase review: no |
 | MEDIUM | Real issues | Yes |
 | HIGH | Critical issues | Yes |
+
+> Note: PR reviews auto-fix at LOW; codebase reviews do not. PR
+> authors should expect automated commits from LOW findings on
+> their PRs, while weekly codebase reviews only open fix PRs for
+> MEDIUM and HIGH priorities.
 
 ## Adding Custom Review Areas
 
