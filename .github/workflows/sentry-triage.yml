@@ -1,0 +1,319 @@
+name: Sentry Triage
+
+# Auto-triage incoming Sentry issues. Triggered by repository_dispatch from a
+# webhook bridge that receives Sentry alerts and forwards a compact payload
+# here. The Claude Code agent investigates, decides whether the issue is
+# worth fixing, and (if so) opens a PR with a regression test plus the fix.
+#
+# A reference Cloudflare Worker implementation of the webhook bridge ships
+# alongside this workflow at `workers/sentry-triage/`. Full architecture
+# overview and operator guide: `docs/sentry-triage/README.md`.
+#
+# Setup overview:
+#
+#   1. Deploy a webhook bridge (use the bundled Worker, or build your own
+#      on Lambda / Vercel / etc.) that:
+#        - validates the Sentry webhook signature,
+#        - extracts a compact payload (shortId, issue URL, top frames, tags,
+#          recent breadcrumbs, latestEventId),
+#        - calls the GitHub repository_dispatch API with
+#            event_type: "sentry-triage"
+#            client_payload: { shortId, sentryIssueUrl, data: <stringified JSON> }
+#      You'll need a fine-grained PAT or GitHub App installation token with
+#      `actions: write` on this repo for the dispatch call.
+#
+#   2. Configure repo secrets:
+#        CLAUDE_CODE_OAUTH_TOKEN   - Claude Code OAuth token
+#        SENTRY_AUTH_TOKEN         - Sentry user / internal-integration token
+#        CLAUDE_PAT                - (optional) PAT used to dispatch CI
+#                                    workflows after the fix PR is opened.
+#                                    Falls back to GITHUB_TOKEN if absent.
+#        SLACK_WEBHOOK_URL         - (optional) failure notifications.
+#
+#   3. Manual smoke testing: workflow_dispatch with a Sentry shortId.
+
+on:
+  repository_dispatch:
+    types: [sentry-triage]
+  workflow_dispatch:
+    inputs:
+      shortId:
+        description: 'Sentry short ID (e.g. PROJECT-4F2)'
+        required: true
+        type: string
+      sentryIssueUrl:
+        description: 'Sentry issue URL'
+        required: true
+        type: string
+      title:
+        description: 'Issue title'
+        required: false
+        type: string
+
+concurrency:
+  # Never run two triage jobs for the same Sentry issue in parallel.
+  group: sentry-triage-${{ github.event.client_payload.shortId || inputs.shortId }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ─── Dedup gate ────────────────────────────────────────────────────────
+      # Skip if any PR (open OR closed) already exists for this Sentry shortId.
+      # A merged PR means we've already fixed it; a closed-unmerged one means a
+      # previous run gave up — either way, don't spawn another run.
+      - name: Dedup check
+        id: dedup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHORT_ID: ${{ github.event.client_payload.shortId || inputs.shortId }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SHORT_ID:-}" ]; then
+            echo "::error::shortId missing from dispatch payload"
+            exit 1
+          fi
+          # Validate shortId shape before using it in branch names — protects
+          # against dispatch-payload injection.
+          if ! printf '%s' "$SHORT_ID" | grep -Eq '^[A-Z0-9][A-Z0-9_-]{1,63}$'; then
+            echo "::error::shortId failed validation: $SHORT_ID"
+            exit 1
+          fi
+          BRANCH="sentry-fix/${SHORT_ID}"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "short_id=$SHORT_ID" >> "$GITHUB_OUTPUT"
+          EXISTING=$(gh pr list \
+            --repo "$REPO" \
+            --state all \
+            --head "$BRANCH" \
+            --json number,state,url \
+            --jq '.[0] // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Found existing PR for $BRANCH: $EXISTING"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write triage context file
+        if: steps.dedup.outputs.skip != 'true'
+        env:
+          # Read values from the environment to avoid shell-injection risks
+          # from templating untrusted client_payload fields directly into a
+          # run block.
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          MANUAL_SHORT_ID: ${{ inputs.shortId }}
+          MANUAL_URL: ${{ inputs.sentryIssueUrl }}
+          MANUAL_TITLE: ${{ inputs.title }}
+        run: |
+          set -euo pipefail
+          mkdir -p .sentry-triage
+          # Prefer the dispatch payload; fall back to workflow_dispatch inputs.
+          if [ -n "${PAYLOAD:-}" ] && [ "$PAYLOAD" != "null" ] && [ "$PAYLOAD" != "{}" ]; then
+            # The bridge sends `data` as a stringified JSON blob; merge it back
+            # in alongside the top-level shortId. If your bridge sends a plain
+            # object instead, replace `(.data | fromjson)` with `.`.
+            printf '%s' "$PAYLOAD" \
+              | jq 'if has("data") and (.data | type) == "string" then (.data | fromjson) + {shortId: .shortId} else . end' \
+              > .sentry-triage/payload.json
+          else
+            jq -n \
+              --arg shortId  "${MANUAL_SHORT_ID:-}" \
+              --arg url      "${MANUAL_URL:-}" \
+              --arg title    "${MANUAL_TITLE:-}" \
+              '{shortId: $shortId, sentryIssueUrl: $url, title: $title, trigger: "manual"}' \
+              > .sentry-triage/payload.json
+          fi
+          echo "--- triage context ---"
+          cat .sentry-triage/payload.json
+          echo "----------------------"
+
+      # ─── Run Claude Code ───────────────────────────────────────────────────
+      - name: Run Claude Code triage
+        if: steps.dedup.outputs.skip != 'true'
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --dangerously-skip-permissions
+            --model opus
+            --max-turns 250
+            --mcp-config '{"mcpServers":{"sentry":{"type":"http","url":"https://mcp.sentry.dev/mcp","headers":{"Authorization":"Bearer ${{ secrets.SENTRY_AUTH_TOKEN }}"}}}}'
+            --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative. After pushing your branch, watch CI and wait for checks to pass. If any check fails, read the failure logs, fix the issue, commit and push the fix (never amend), then wait for CI to go green. Do NOT consider your work done until all CI checks pass."
+
+          prompt: |
+            REPO: ${{ github.repository }}
+            BRANCH: ${{ steps.dedup.outputs.branch }}
+            SHORT_ID: ${{ steps.dedup.outputs.short_id }}
+
+            You are triaging a Sentry issue. A compact context payload from
+            the webhook bridge has been written to `.sentry-triage/payload.json`
+            in the checkout. Read it first — it contains the Sentry issue URL,
+            top stack frames, recent breadcrumbs, tags, release, environment,
+            and any Sentry event/API URLs the bridge included. The Sentry MCP
+            server (tool prefix `mcp__sentry__*`) is configured for this run.
+
+            ## Your job
+
+            1. **Understand the bug.**
+               a. Read `.sentry-triage/payload.json` fully.
+               b. Use the Sentry MCP server to fetch the full latest event for
+                  this issue. The payload usually includes `latestEventId` and
+                  a Sentry API URL. Get the full stacktrace, breadcrumbs,
+                  request data, tags, and contexts. Sentry's summary is often
+                  thin — always pull the full event.
+               c. If useful, query Sentry for recent events on the same issue,
+                  related issues, and the release where `firstSeen` landed.
+               d. Read the source code at every in-app frame in the stack
+                  trace. Don't guess — open the files and read the surrounding
+                  logic.
+
+            2. **Decide whether to fix.** Some issues are not worth a PR:
+               - Third-party / browser-extension noise (frames entirely outside
+                 our code, unknown globals, browser-version-specific quirks).
+               - One-shot events with no reproduction path and no in-app frames.
+               - Issues whose root cause is outside this repo (infrastructure,
+                 network, upstream API).
+
+               If you decide NOT to fix: post a short comment on the Sentry
+               issue via the MCP explaining why (one-line reason plus a
+               reference to the commit/files you investigated), then STOP. Do
+               not open a PR. Do not create an empty PR.
+
+            3. **If you do fix:**
+               a. Create branch `${{ steps.dedup.outputs.branch }}` from `main`.
+               b. Follow TDD: write a failing test that reproduces the bug
+                  first, then make it pass. Use the project's existing test
+                  conventions (check the repo for examples).
+               c. Implement the fix. Keep the diff surgical — do not refactor
+                  adjacent code.
+               d. Run the project's lint, type-check, and test commands locally
+                  and get them green before pushing.
+               e. Commit with a message that references the Sentry short ID,
+                  e.g. `fix(sentry): ${{ steps.dedup.outputs.short_id }} — <what broke and why>`.
+               f. Push the branch. Open a PR with title
+                  `fix(sentry): ${{ steps.dedup.outputs.short_id }} — <short summary>`
+                  and a body with two sections, in this order:
+
+                  `## TL;DR` — an executive summary written for a busy
+                  reviewer deciding whether to merge. Target ~15 seconds of
+                  reading. Plain English only — no stack traces, file paths,
+                  or code blocks in this section. Use exactly these three
+                  bolded bullets, one to two sentences each:
+                    - **What went wrong:** the user-visible symptom and
+                      blast radius (e.g. "checkout silently failed for ~30
+                      logged-in Safari users; fired 1.2k times in the last
+                      24h"). Pull frequency / affected-user counts from the
+                      Sentry MCP when available; if the data isn't there,
+                      say so rather than guessing.
+                    - **What was fixed:** the behavioural change in plain
+                      English, not a list of file names.
+                    - **Risk:** an honest, concrete assessment of residual
+                      risk — call out hot paths, feature flags, data
+                      migrations, or anything a reviewer should
+                      double-check. If risk is genuinely negligible, say so
+                      plainly.
+
+                  `## Details` — everything a reviewer needs to verify the
+                  fix is correct. Include:
+                    - A link to the Sentry issue (from the payload).
+                    - What the root cause was.
+                    - What you changed and why this is the minimal fix.
+                    - Any residual risk or follow-up work you deliberately
+                      did NOT do.
+                    - `Closes Sentry: ${{ steps.dedup.outputs.short_id }}`
+
+                  Mark the PR ready for review (not draft).
+               g. Watch CI. If checks fail, read the logs, push fixes as new
+                  commits (never amend, never force-push), and iterate until
+                  CI is green.
+
+            ## Constraints
+
+            - NEVER push to `main`. Always push to `${{ steps.dedup.outputs.branch }}`.
+            - NEVER force-push. Never `git commit --amend`. Never `git rebase`.
+            - Fail fast, fail loud: never paper over an error with
+              `catch (_e) {}` or `.catch(() => {})`.
+            - Exercise real code in tests. Only mock at external service
+              boundaries (third-party APIs, payment providers, etc.).
+            - If you're uncertain about the fix, prefer a solid regression
+              test plus a narrow, conservative code change over a speculative
+              refactor.
+
+      # Trigger CI on the new PR's branch. Empty-commit pushes are unreliable —
+      # GitHub may suppress pull_request:synchronize even when using a PAT —
+      # so we dispatch the workflows directly.
+      - name: Trigger CI workflows
+        if: success() && steps.dedup.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_PAT || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.dedup.outputs.branch }}
+        run: |
+          set -euo pipefail
+          # Only trigger if Claude actually opened a PR (it may have decided
+          # the issue wasn't worth fixing).
+          PR_NUMBER=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No open PR on $BRANCH — Claude decided not to open one. Nothing to trigger."
+            exit 0
+          fi
+          .github/workflows/scripts/trigger-ci-workflows.sh
+
+      - name: Skipped (dedup)
+        if: steps.dedup.outputs.skip == 'true'
+        run: |
+          echo "PR for ${{ steps.dedup.outputs.branch }} already exists — skipping."
+          echo "::notice::Sentry triage skipped for ${{ steps.dedup.outputs.short_id }}: PR already exists."
+
+      # This workflow runs on repository_dispatch / workflow_dispatch, never
+      # on a PR, so a failure here is invisible without an out-of-band signal.
+      # Posts to Slack when the job fails on the default branch. Skipped for
+      # non-main dispatches (typically manual smoke tests) to avoid noise.
+      # Remove or replace this step if you don't use Slack.
+      - name: Notify Slack on failure
+        if: failure() && github.ref == 'refs/heads/main' && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        uses: slackapi/slack-github-action@v3.0.2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: ":rotating_light: Sentry triage failed"
+            blocks:
+              - type: "header"
+                text:
+                  type: "plain_text"
+                  text: ":rotating_light: Sentry Triage Failed"
+              - type: "section"
+                fields:
+                  - type: "mrkdwn"
+                    text: "*Trigger:*\n${{ github.event_name }}"
+                  - type: "mrkdwn"
+                    text: "*Sentry shortId:*\n${{ github.event.client_payload.shortId || inputs.shortId || 'unknown' }}"
+              - type: "actions"
+                elements:
+                  - type: "button"
+                    text:
+                      type: "plain_text"
+                      text: "View Run"
+                    url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    style: "danger"
