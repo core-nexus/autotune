@@ -1,0 +1,127 @@
+name: Claude Code
+
+# General-purpose @claude assistant.
+# Mention `@claude` in an issue, PR, PR review comment, or PR review and the
+# Claude Code agent will respond — read context, make changes, push commits,
+# open PRs, etc. Configure via the commented sections below.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read # Required for Claude to read CI results on PRs
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Authentication: OAuth token (uses Claude Code plan credits, not API credits)
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # CLI arguments
+          claude_args: >-
+            --dangerously-skip-permissions
+            --model opus
+            --max-turns 250
+            --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative. After pushing your branch, watch CI and wait for checks to pass. If any check fails, read the failure logs, fix the issue, commit and push the fix (never amend), then wait for CI to go green. Do NOT consider your work done until all CI checks pass."
+
+          # --- Trigger configuration ---
+          # trigger_phrase: "/claude"
+          # assignee_trigger: "claude-bot"
+
+          # --- Tool restrictions (uncomment to lock down what Claude can do) ---
+          # claude_args: >-
+          #   --allowedTools "Bash(npm install),Bash(npm test:*),Bash(npm run lint),Bash(git *),Bash(gh *),Read,Glob,Grep,Edit,Write,WebFetch,WebSearch,Agent"
+
+          # --- System prompt additions (appended to default, doesn't replace it) ---
+          # claude_args: >-
+          #   --append-system-prompt "Always run lint and type-checks before committing."
+
+          # --- Limit costs with a budget cap (in USD) ---
+          # claude_args: >-
+          #   --max-cost 5.00
+
+          # --- MCP server configuration (extend Claude's capabilities) ---
+          # claude_args: >-
+          #   --mcp-config '{"mcpServers":{"my-server":{"command":"npx","args":["-y","my-mcp-server"]}}}'
+
+          # --- Structured JSON output (for automation pipelines) ---
+          # claude_args: >-
+          #   --json-schema '{"type":"object","properties":{"summary":{"type":"string"},"changes":{"type":"array","items":{"type":"string"}}}}'
+
+          # --- Bot filtering (allow other bots to trigger @claude) ---
+          # allowed_bots: "dependabot[bot],renovate[bot]"
+
+          # --- Comment filtering (exclude noisy bot comments from context) ---
+          # exclude_comments_by_actor: "*[bot]"
+
+          # --- Branch naming template ---
+          # branch_name_template: "{{prefix}}{{description}}-{{timestamp}}"
+
+          # --- Commit signing (if your repo requires signed commits) ---
+          # use_commit_signing: true
+
+          # --- Sticky comment mode (single updating comment instead of multiple) ---
+          # use_sticky_comment: true
+
+          # --- Settings JSON (environment variables, hooks, etc.) ---
+          # settings: |
+          #   {
+          #     "env": {
+          #       "NODE_ENV": "test",
+          #       "CI": "true"
+          #     }
+          #   }
+
+      # Trigger CI on the branch Claude just pushed to. Empty-commit pushes are
+      # unreliable — GitHub may suppress the pull_request:synchronize event
+      # even when using a PAT — so we dispatch the workflows directly instead.
+      #
+      # Customize WORKFLOWS for your project (or set it via repo variables).
+      # If GH_TOKEN points at the default GITHUB_TOKEN, workflow_run events
+      # triggered from that token won't cascade — set CLAUDE_PAT (a fine-
+      # grained PAT with actions:write + contents:read) to get full triggering.
+      - name: Trigger CI workflows
+        if: success() && (github.event.issue.pull_request || github.event.pull_request)
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_PAT || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            echo "No PR number; skipping CI trigger."
+            exit 0
+          fi
+          BRANCH=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefName -q .headRefName 2>/dev/null || echo "")
+          if [[ -z "${BRANCH}" ]]; then
+            echo "Could not resolve branch for PR ${PR_NUMBER}; skipping."
+            exit 0
+          fi
+          export BRANCH
+          .github/workflows/scripts/trigger-ci-workflows.sh
