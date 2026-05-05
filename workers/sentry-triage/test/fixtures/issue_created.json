@@ -18,8 +18,8 @@
       "permalink": "https://acme.sentry.io/organizations/acme/issues/1234567890/",
       "project": {
         "id": 100,
-        "name": "core",
-        "slug": "core"
+        "name": "web",
+        "slug": "web"
       },
       "organization": {
         "id": 200,

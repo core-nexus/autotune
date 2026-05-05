@@ -4,7 +4,7 @@ import type { Normalized } from '../src/types.js'
 
 function makeNormalized(overrides: Partial<Normalized> = {}): Normalized {
   return {
-    projectSlug: 'core',
+    projectSlug: 'web',
     orgSlug: 'acme',
     shortId: 'WEB-1',
     issueId: '1',

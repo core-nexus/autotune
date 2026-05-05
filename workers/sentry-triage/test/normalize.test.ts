@@ -19,7 +19,7 @@ describe('normalize event_alert', () => {
     expect(result.kind).toBe('normalized')
     if (result.kind !== 'normalized') return
     const n = result.data
-    expect(n.projectSlug).toBe('core')
+    expect(n.projectSlug).toBe('web')
     expect(n.orgSlug).toBe('acme')
     expect(n.shortId).toBe('WEB-4F2')
     expect(n.title).toContain('TypeError')
@@ -33,7 +33,7 @@ describe('normalize event_alert', () => {
     expect(n.latestEventId).toBe('abc123abc123abc123abc123abc12345')
     expect(n.sentryIssueUrl).toMatch(/sentry\.io/)
     expect(n.sentryEventUrl).toMatch(/abc123/)
-    expect(n.sentryApiEventUrl).toMatch(/^https:\/\/sentry\.io\/api\/0\/projects\/acme\/core\/events\//)
+    expect(n.sentryApiEventUrl).toMatch(/^https:\/\/sentry\.io\/api\/0\/projects\/acme\/web\/events\//)
   })
 
   it('extracts the exception type and value', () => {
@@ -106,7 +106,7 @@ describe('normalize issue', () => {
     expect(result.kind).toBe('normalized')
     if (result.kind !== 'normalized') return
     expect(result.data.trigger).toBe('created')
-    expect(result.data.projectSlug).toBe('core')
+    expect(result.data.projectSlug).toBe('web')
     expect(result.data.orgSlug).toBe('acme')
     expect(result.data.shortId).toBe('WEB-4F2')
     expect(result.data.issueId).toBe('1234567890')
@@ -147,7 +147,7 @@ describe('normalize issue', () => {
             title: 't',
             level: 'error',
             platform: 'node',
-            project: { slug: 'core' },
+            project: { slug: 'web' },
             organization: { slug: 'acme' },
           },
         },

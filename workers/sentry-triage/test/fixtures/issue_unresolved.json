@@ -15,7 +15,7 @@
       "userCount": 3,
       "type": "error",
       "permalink": "https://acme.sentry.io/organizations/acme/issues/1234567890/",
-      "project": { "slug": "core" },
+      "project": { "slug": "web" },
       "organization": { "slug": "acme" }
     }
   }

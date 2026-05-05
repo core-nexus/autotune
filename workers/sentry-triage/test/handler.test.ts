@@ -15,7 +15,7 @@ const NOW_MS = 1_745_323_200_000
 const TS_SECONDS = String(NOW_MS / 1000)
 
 const PROJECT_MAP = JSON.stringify({
-  core: { repo: 'acme/web', eventType: 'sentry-triage' },
+  web: { repo: 'acme/web', eventType: 'sentry-triage' },
 })
 
 function baseEnv(): Env {
@@ -176,7 +176,7 @@ describe('handler /sentry/webhook - routing', () => {
     expect(posted.event_type).toBe('sentry-triage')
     expect(posted.client_payload.shortId).toBe('WEB-4F2')
     const postedData = JSON.parse(posted.client_payload.data)
-    expect(postedData.projectSlug).toBe('core')
+    expect(postedData.projectSlug).toBe('web')
     expect(postedData.trigger).toBe('event_alert')
     // KV got populated.
     expect(kv.store.size).toBe(1)
@@ -236,7 +236,7 @@ describe('handler /sentry/webhook - routing', () => {
           title: 't',
           level: 'error',
           platform: 'node',
-          project: { slug: 'core' },
+          project: { slug: 'web' },
           organization: { slug: 'acme' },
         },
       },

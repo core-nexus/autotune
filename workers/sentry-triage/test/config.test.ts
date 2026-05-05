@@ -5,18 +5,18 @@ describe('parseProjectMap', () => {
   it('parses a valid map with defaults', () => {
     const map = parseProjectMap(
       JSON.stringify({
-        core: { repo: 'acme/web', eventType: 'sentry-triage' },
-        vortex: { repo: 'acme/api' },
+        web: { repo: 'acme/web', eventType: 'sentry-triage' },
+        api: { repo: 'acme/api' },
       }),
     )
-    expect(map.core).toEqual({ repo: 'acme/web', eventType: 'sentry-triage' })
-    expect(map.vortex).toEqual({ repo: 'acme/api', eventType: 'sentry-triage' })
+    expect(map.web).toEqual({ repo: 'acme/web', eventType: 'sentry-triage' })
+    expect(map.api).toEqual({ repo: 'acme/api', eventType: 'sentry-triage' })
   })
 
   it('preserves minEventCount and allowWarnings', () => {
     const map = parseProjectMap(
       JSON.stringify({
-        core: {
+        web: {
           repo: 'acme/web',
           eventType: 'sentry-triage',
           minEventCount: 5,
@@ -24,8 +24,8 @@ describe('parseProjectMap', () => {
         },
       }),
     )
-    expect(map.core?.minEventCount).toBe(5)
-    expect(map.core?.allowWarnings).toBe(true)
+    expect(map.web?.minEventCount).toBe(5)
+    expect(map.web?.allowWarnings).toBe(true)
   })
 
   it('throws when missing', () => {
@@ -43,16 +43,16 @@ describe('parseProjectMap', () => {
   })
 
   it('throws on bad repo shape', () => {
-    expect(() => parseProjectMap(JSON.stringify({ core: { repo: 'bad' } }))).toThrow(ConfigError)
-    expect(() => parseProjectMap(JSON.stringify({ core: { repo: 'a/b/c' } }))).toThrow(ConfigError)
+    expect(() => parseProjectMap(JSON.stringify({ web: { repo: 'bad' } }))).toThrow(ConfigError)
+    expect(() => parseProjectMap(JSON.stringify({ web: { repo: 'a/b/c' } }))).toThrow(ConfigError)
   })
 
   it('throws on bad minEventCount', () => {
     expect(() =>
-      parseProjectMap(JSON.stringify({ core: { repo: 'a/b', minEventCount: -1 } })),
+      parseProjectMap(JSON.stringify({ web: { repo: 'a/b', minEventCount: -1 } })),
     ).toThrow(ConfigError)
     expect(() =>
-      parseProjectMap(JSON.stringify({ core: { repo: 'a/b', minEventCount: 'five' } })),
+      parseProjectMap(JSON.stringify({ web: { repo: 'a/b', minEventCount: 'five' } })),
     ).toThrow(ConfigError)
   })
 })

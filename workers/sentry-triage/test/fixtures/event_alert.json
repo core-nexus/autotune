@@ -7,7 +7,7 @@
       "event_id": "abc123abc123abc123abc123abc12345",
       "issue_id": "WEB-4F2",
       "groupID": "1234567890",
-      "project_slug": "core",
+      "project_slug": "web",
       "title": "TypeError: Cannot read properties of undefined (reading 'foo')",
       "culprit": "at Foo.bar(src/foo.ts)",
       "level": "error",
@@ -21,8 +21,8 @@
       "web_url": "https://acme.sentry.io/issues/WEB-4F2/events/abc123abc123abc123abc123abc12345/",
       "issue_url": "https://acme.sentry.io/issues/WEB-4F2/",
       "project": {
-        "slug": "core",
-        "name": "core",
+        "slug": "web",
+        "name": "web",
         "organization_slug": "acme"
       },
       "exception": {
