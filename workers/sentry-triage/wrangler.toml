@@ -1,0 +1,29 @@
+name = "sentry-triage"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# KV namespace used for 24h dedup of seen Sentry shortIds.
+# Create one with:
+#   wrangler kv namespace create SENTRY_SEEN
+# then paste the returned `id` below (replacing this placeholder).
+[[kv_namespaces]]
+binding = "SENTRY_SEEN"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Optional: Analytics Engine for counters.
+# [[analytics_engine_datasets]]
+# binding = "ANALYTICS"
+# dataset = "sentry_triage"
+
+[vars]
+LOG_LEVEL = "info"
+REDACT_PII = "true"
+ALLOW_WARNINGS_GLOBAL = "false"
+
+# Secrets (set via `wrangler secret put`):
+#   SENTRY_CLIENT_SECRET  - Sentry Internal Integration client secret
+#   PROJECT_MAP           - JSON string, Sentry project slug -> { repo, eventType, ... }
+#   GITHUB_PAT            - fine-grained PAT with contents+actions write on each target repo
+#   SENTRY_DSN            - (optional) DSN for self-reporting to Sentry

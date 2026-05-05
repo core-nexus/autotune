@@ -1,0 +1,36 @@
+{
+  "action": "created",
+  "installation": { "uuid": "00000000-0000-0000-0000-000000000001" },
+  "data": {
+    "issue": {
+      "id": "1234567890",
+      "shortId": "WEB-4F2",
+      "title": "TypeError: Cannot read properties of undefined",
+      "culprit": "Foo.bar(src/foo.ts)",
+      "level": "error",
+      "platform": "javascript",
+      "firstSeen": "2025-04-22T12:00:00Z",
+      "lastSeen": "2025-04-22T12:00:05Z",
+      "count": 3,
+      "userCount": 1,
+      "type": "error",
+      "issueCategory": "error",
+      "permalink": "https://acme.sentry.io/organizations/acme/issues/1234567890/",
+      "project": {
+        "id": 100,
+        "name": "core",
+        "slug": "core"
+      },
+      "organization": {
+        "id": 200,
+        "name": "acme",
+        "slug": "acme"
+      },
+      "tags": [
+        ["environment", "production"],
+        ["release", "web@1.2.3"],
+        ["level", "error"]
+      ]
+    }
+  }
+}

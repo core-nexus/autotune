@@ -1,0 +1,98 @@
+{
+  "action": "triggered",
+  "installation": { "uuid": "00000000-0000-0000-0000-000000000001" },
+  "data": {
+    "triggered_rule": "High Priority Errors",
+    "event": {
+      "event_id": "abc123abc123abc123abc123abc12345",
+      "issue_id": "WEB-4F2",
+      "groupID": "1234567890",
+      "project_slug": "core",
+      "title": "TypeError: Cannot read properties of undefined (reading 'foo')",
+      "culprit": "at Foo.bar(src/foo.ts)",
+      "level": "error",
+      "platform": "javascript",
+      "environment": "production",
+      "release": "web@1.2.3",
+      "datetime": "2025-04-22T12:00:00Z",
+      "received": "2025-04-22T12:00:01Z",
+      "type": "error",
+      "message": "TypeError: Cannot read properties of undefined (reading 'foo')",
+      "web_url": "https://acme.sentry.io/issues/WEB-4F2/events/abc123abc123abc123abc123abc12345/",
+      "issue_url": "https://acme.sentry.io/issues/WEB-4F2/",
+      "project": {
+        "slug": "core",
+        "name": "core",
+        "organization_slug": "acme"
+      },
+      "exception": {
+        "values": [
+          {
+            "type": "TypeError",
+            "value": "Cannot read properties of undefined (reading 'foo')",
+            "stacktrace": {
+              "frames": [
+                {
+                  "filename": "node_modules/framework/runtime.js",
+                  "function": "run",
+                  "lineno": 100,
+                  "colno": 10,
+                  "in_app": false,
+                  "context_line": "runtime.run()"
+                },
+                {
+                  "filename": "src/foo.ts",
+                  "function": "Foo.bar",
+                  "lineno": 42,
+                  "colno": 7,
+                  "in_app": true,
+                  "context_line": "return obj.foo.bar"
+                },
+                {
+                  "filename": "src/index.ts",
+                  "function": "main",
+                  "lineno": 10,
+                  "colno": 3,
+                  "in_app": true,
+                  "context_line": "await boot()"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "breadcrumbs": {
+        "values": [
+          {
+            "category": "navigation",
+            "level": "info",
+            "message": "/dashboard",
+            "timestamp": 1745323200.0
+          },
+          {
+            "category": "http",
+            "level": "info",
+            "message": "GET /api/things 200",
+            "timestamp": 1745323201.0
+          },
+          {
+            "category": "ui.click",
+            "level": "info",
+            "message": "button#save",
+            "timestamp": 1745323202.0
+          }
+        ]
+      },
+      "tags": [
+        ["environment", "production"],
+        ["release", "web@1.2.3"],
+        ["browser", "Chrome 120.0"],
+        ["browser.name", "Chrome"],
+        ["os", "Mac OS X 14.2"],
+        ["url", "https://acme.example/dashboard"],
+        ["user.email", "alice@example.com"],
+        ["internal.secret_tag", "should-be-dropped"]
+      ]
+    }
+  }
+}
