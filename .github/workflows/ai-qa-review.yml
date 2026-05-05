@@ -1,0 +1,304 @@
+name: AI QA Review
+
+# Visual / behavioural QA of a PR's preview deployment.
+#
+# Pairs nicely with `claude-pr-review.yml`: that workflow does code-level
+# review (diff, types, error handling), this one opens the rendered preview
+# in a real browser and verifies the change works end-to-end. Both can run
+# in parallel on PR open / ready-for-review — they don't depend on each
+# other.
+#
+# Triggers:
+#   - pull_request: opened / ready_for_review — automatic kickoff.
+#     `synchronize` is deliberately excluded; pushing commits to a PR will
+#     NOT re-run QA. Use `/qa-review` to re-trigger against the new head.
+#   - issue_comment: `/qa-review` in a PR comment for manual re-runs.
+#   - workflow_dispatch: manual run against a given PR number.
+#
+# Required setup for your repo:
+#   - Secret `CLAUDE_CODE_OAUTH_TOKEN`.
+#   - A way to determine the preview URL for a PR. The default
+#     `wait-for-preview-url.sh` polls PR comments for the first URL matching
+#     `PREVIEW_URL_PATTERN` (env var, default any HTTPS URL). Customize it
+#     for your platform — most preview-deploy bots post a URL in a PR
+#     comment within a minute of the PR opening.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - ready_for_review
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to QA'
+        required: true
+        type: string
+  issue_comment:
+    types: [created]
+
+# Cancel older runs for the same PR. `/qa-review` comments and manual
+# dispatch are still preserved — those are user-intentional reruns we
+# don't want to lose to cancellation.
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{
+      github.event.pull_request.number
+        || github.event.issue.number
+        || inputs.pr_number
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  qa:
+    # Triggered by:
+    #   (a) PR opened / ready_for_review,
+    #   (b) a non-bot author commenting `/qa-review` on a PR,
+    #   (c) manual workflow_dispatch.
+    # Dependabot is skipped: mechanical dep bumps don't need visual QA.
+    if: |
+      (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/qa-review')) ||
+      (github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      # Intentionally scoped tight. The LLM agent runs in this job and must
+      # not hold a token that could push to any branch — prompt-injection
+      # from PR content (diff, body, rendered preview page) could otherwise
+      # hijack that scope.
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+      deployments: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Post an immediate "QA starting" ack so the PR shows confirmation
+      # within seconds. Without this, the user sees no feedback until
+      # claude-code-action's `track_progress` comment lands — typically
+      # 1-3 minutes in. The comment carries a dedicated marker
+      # (`<!-- ai-qa-review-starting -->`) distinct from the final
+      # report's marker so the post-comment step can clean it up
+      # cleanly.
+      - name: Post starting acknowledgment comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: .github/workflows/scripts/post-qa-starting-comment.sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Playwright MCP drives a real Chromium via Playwright; install only
+      # chromium to keep the bootstrap under ~30s.
+      - name: Install Playwright Chromium
+        run: npx --yes playwright@latest install --with-deps chromium
+
+      - name: Wait for preview URL
+        id: preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          # Customize for your preview platform — default matches any HTTPS URL.
+          # Examples:
+          #   Vercel:     'https://[a-z0-9-]+\.vercel\.app'
+          #   Netlify:    'https://deploy-preview-[0-9]+--[^.]+\.netlify\.app'
+          #   Cloudflare: 'https://[a-f0-9]+-[^.]+\.[^.]+\.workers\.dev'
+          # PREVIEW_URL_PATTERN: 'https://[a-z0-9-]+\.vercel\.app'
+        run: .github/workflows/scripts/wait-for-preview-url.sh
+
+      - name: Prepare QA artifacts directory
+        run: |
+          rm -rf "${GITHUB_WORKSPACE}/qa-artifacts"
+          mkdir -p "${GITHUB_WORKSPACE}/qa-artifacts"
+
+      # Pre-warm the browser MCP packages with retry/backoff BEFORE
+      # claude-code-action launches them. The most common failure mode is
+      # `npx --yes <pkg>@latest` flaking on a transient registry hiccup —
+      # when that happens inside claude-code-action the MCP server never
+      # starts, the agent has no `mcp__playwright__*` tools, and we end up
+      # with a "could not run" no-op comment with no clue WHY.
+      #
+      # Tries each package up to 3× with exponential backoff. If at least
+      # one succeeds, the next step runs normally. If both fail, writes a
+      # diagnostic _comment.md (with log tails) and sets `any-ok=false`,
+      # which gates the AI QA Review step out so we don't burn a 250-turn
+      # agent budget just to write the same no-op comment.
+      - name: Pre-warm browser MCP packages
+        id: mcp-prewarm
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: .github/workflows/scripts/prewarm-qa-mcp.sh
+
+      # Build the MCP server config as a single-line JSON string and expose
+      # it as a step output so the next step can pass it INLINE via
+      # `--mcp-config '<json>'` in `claude_args`.
+      #
+      # Why inline (not a file path): claude-code-action@v1 prepends its own
+      # `--mcp-config '<inline JSON>'` to ours. Its merger only merges
+      # INLINE JSON values — file-path values are silently dropped when
+      # at least one inline JSON is also present. So a `--mcp-config
+      # /path/to/file.json` from us never reaches the SDK and our MCP
+      # servers never spawn.
+      #
+      # Both servers are launched through `wrap-mcp.sh`, which tees the
+      # MCP's stderr to a log file in $ARTIFACTS_DIR. This is the only
+      # place we can capture runtime MCP errors (stdio handshake failures,
+      # missing system libs, browser-binary mismatch).
+      #
+      # Playwright MCP: primary automation surface. Chrome DevTools MCP:
+      # secondary, used for network/console inspection. `--isolated` gets
+      # a fresh profile per session; `--headless` is required on
+      # GitHub-hosted runners.
+      - name: Build MCP server config
+        id: mcp-config
+        if: steps.mcp-prewarm.outputs.any-ok == 'true'
+        env:
+          MCP_CONFIG_PATH: ${{ github.workspace }}/qa-artifacts/mcp-config.json
+          WRAP_MCP: ${{ github.workspace }}/.github/workflows/scripts/wrap-mcp.sh
+          ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts
+        run: |
+          set -euo pipefail
+          jq -nc \
+            --arg wrap "${WRAP_MCP}" \
+            --arg art "${ARTIFACTS_DIR}" \
+            '{
+              mcpServers: {
+                playwright: {
+                  command: $wrap,
+                  args: [
+                    "\($art)/mcp-runtime-playwright.log",
+                    "npx", "--yes", "@playwright/mcp@latest",
+                    "--browser", "chromium",
+                    "--headless",
+                    "--isolated",
+                    "--viewport-size", "1440,900",
+                    "--output-dir", $art
+                  ]
+                },
+                "chrome-devtools": {
+                  command: $wrap,
+                  args: [
+                    "\($art)/mcp-runtime-chrome-devtools.log",
+                    "npx", "--yes", "chrome-devtools-mcp@latest",
+                    "--headless=true",
+                    "--isolated=true"
+                  ]
+                }
+              }
+            }' >"${MCP_CONFIG_PATH}"
+          echo "Wrote MCP config to ${MCP_CONFIG_PATH}:"
+          cat "${MCP_CONFIG_PATH}"
+          {
+            echo "json<<MCPCFG_EOF"
+            cat "${MCP_CONFIG_PATH}"
+            echo MCPCFG_EOF
+          } >>"${GITHUB_OUTPUT}"
+
+      # Render the agent's prompt from a template. The full prompt exceeds
+      # GitHub Actions' 21K-character expression limit, which silently
+      # breaks the workflow when inlined as a `prompt: |` scalar. Keeping
+      # the body in `qa-review-prompt.template.md` and `envsubst`-ing it
+      # into a multi-line step output sidesteps the limit.
+      - name: Render QA prompt
+        id: render-prompt
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          PREVIEW_URL: ${{ steps.preview.outputs.preview-url }}
+          WORKSPACE: ${{ github.workspace }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # envsubst is given an EXPLICIT allowlist of variables so it only
+          # substitutes the placeholders set above. Without this guard, any
+          # bare `$ARTIFACTS_DIR` / `$PR_NUMBER` reference INSIDE the
+          # prompt body — there for the agent to read — would also get
+          # substituted, turning instructions into empty strings.
+          {
+            echo "body<<QA_PROMPT_BODY_EOF"
+            envsubst '$REPO $PR_NUMBER $PREVIEW_URL $WORKSPACE $RUN_URL' \
+              < .github/workflows/scripts/qa-review-prompt.template.md
+            echo "QA_PROMPT_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: AI QA Review
+        # Skip the agent entirely when both MCPs failed pre-warm — the
+        # prewarm step has already written a diagnostic _comment.md that
+        # the post-comment step will pick up.
+        if: steps.mcp-prewarm.outputs.any-ok == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          allowed_bots: 'claude[bot],app/claude,github-actions[bot]'
+          claude_args: >-
+            --dangerously-skip-permissions
+            --mcp-config '${{ steps.mcp-config.outputs.json }}'
+            --model opus
+            --max-turns 250
+            --append-system-prompt "If a CLAUDE.md file exists at the repo root, read it before reviewing — it defines project conventions and the blocking-issue bar. Treat CLAUDE.md as authoritative."
+
+          prompt: ${{ steps.render-prompt.outputs.body }}
+
+      # Verify the QA pass actually QA'd. If the agent (or the prewarm step
+      # before it) wrote a "could not run" verdict to _comment.md — meaning
+      # no browser session, no screenshots, no real review — fail the qa
+      # job so the post-comment step's failure-banner branch fires (instead
+      # of deleting the tracking comment) and the PR check shows red.
+      - name: Verify QA produced a real report
+        if: always()
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts
+        run: .github/workflows/scripts/verify-qa-report.sh
+
+      # Upload screenshots/videos as a workflow artifact so reviewers can
+      # download them from the run page. The PR comment links here.
+      - name: Upload QA artifacts
+        if: always()
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-artifacts-${{ github.run_id }}
+          path: qa-artifacts
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # Post the final QA report as a PR comment. The agent wrote it to
+      # `_comment.md`; this step adds a header linking to the workflow
+      # artifact bundle (where reviewers can download screenshots/videos)
+      # and replaces relative `./qa-artifacts/...` references with the
+      # same artifact link, since GitHub PR comments can't render images
+      # from a runner filesystem path.
+      #
+      # If you want inline image rendering, the recommended path is to
+      # mirror the captured media to a public host (e.g. a dedicated
+      # GitHub repo, an S3 bucket, or your CDN) before this step and
+      # rewrite the relative paths to absolute URLs in `_comment.md`. See
+      # `post-qa-comment.sh` for the rewrite hook.
+      - name: Post QA review comment
+        if: always() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts
+          ARTIFACT_NAME: qa-artifacts-${{ github.run_id }}
+          QA_RESULT: ${{ job.status }}
+        run: .github/workflows/scripts/post-qa-comment.sh
