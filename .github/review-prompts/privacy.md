@@ -50,6 +50,16 @@ and protected throughout the codebase.
 - [ ] Each third-party integration sends only the minimum necessary data
 - [ ] Data processing agreements are in place (or flagged as needed)
 
+#### LLM / AI Services
+
+When the codebase calls an LLM provider (Anthropic, OpenAI, etc.) directly or through an agent framework, audit the prompt construction and provider settings specifically:
+
+- [ ] Prompts and tool-call inputs do not embed end-user PII (emails, names, addresses, phone numbers, payment details, government IDs) without explicit user consent for AI processing
+- [ ] Provider account / workspace settings opt out of training on customer data where the provider supports it (e.g., zero-data-retention or no-training settings)
+- [ ] Conversation transcripts, prompt logs, and completion logs (whether stored by the provider, in your own database, or in observability tooling) are not stored alongside identifying information unless required and disclosed
+- [ ] The provider's DPA and sub-processor list cover the categories of data being passed in prompts; if the prompt contains regulated data (PHI, financial, EU personal data), confirm coverage
+- [ ] System prompts, retrieved documents, and tool outputs do not silently leak data from other tenants/users into the prompt context
+
 ### Frontend Privacy
 
 - [ ] No PII in URL parameters or fragment identifiers
@@ -64,6 +74,7 @@ and protected throughout the codebase.
 - [ ] Soft-deleted data has a hard-delete schedule or process
 - [ ] Session data, tokens, and temporary records have expiration
 - [ ] Log retention policies are appropriate for the data sensitivity
+- [ ] CI/CD build logs and AI-tool transcripts (e.g. `claude-code-action` execution files, agent step logs, debug artifacts) do not persist PII or sensitive credentials beyond the runner; retention windows for Actions logs, artifacts, and any uploaded transcripts are configured appropriately for the data sensitivity
 
 ## Severity Guide
 
