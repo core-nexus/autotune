@@ -85,7 +85,13 @@ Review the health of the project's most critical dependencies:
 
 - [ ] Dependencies come from expected registries (npmjs.com, etc.)
 - [ ] No typosquat package names (names similar to popular packages)
-- [ ] GitHub Actions use pinned versions (`@v4` not `@main`)
+- [ ] GitHub Actions are pinned to a commit SHA (third-party actions
+      especially), with the human-readable version as a trailing comment,
+      e.g. `uses: owner/action@<40-char-sha>  # v1.2.3`
+- [ ] CI runners pin a specific image (e.g. `ubuntu-24.04`) rather than
+      a moving tag like `ubuntu-latest`
+- [ ] Dependabot or Renovate is configured for the `github-actions`
+      ecosystem so action bumps surface as reviewable PRs
 - [ ] Docker images (if any) use specific tags, not `latest`
 - [ ] No `eval()` or dynamic code execution from dependency content
 

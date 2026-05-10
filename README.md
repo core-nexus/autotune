@@ -55,6 +55,7 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
    - .github/workflows/codebase-review.yml
    - .github/workflows/claude-pr-review.yml
    - .github/workflows/scripts/  (all 4 .sh files)
+   - .github/dependabot.yml  (watches the github-actions ecosystem)
 
 3. Make the shell scripts executable:
    chmod +x .github/workflows/scripts/*.sh
@@ -126,9 +127,15 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
 1. Add `SLACK_WEBHOOK_URL` to your repo secrets
 2. Replace the notify step with:
 
+The example below pins to `slackapi/slack-github-action` v3.0.1 (by commit
+SHA, with the version in a trailing comment). v3 changed the payload schema
+versus v2 — if you copy a v2 example from elsewhere, the `payload:` keys
+will not match. Stick to the snippet here, or pin to the latest v2.x and
+adjust the payload accordingly.
+
 ```yaml
 - name: Notify Slack on failure
-  uses: slackapi/slack-github-action@v3.0.1
+  uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95  # v3.0.1
   with:
     webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
     webhook-type: incoming-webhook
@@ -146,6 +153,22 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
             - type: "mrkdwn"
               text: "*Run:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View>"
 ```
+
+### Runner & Dependency Hygiene
+
+The shipped workflows are hardened for supply-chain hygiene:
+
+- **Runner image** is pinned to `ubuntu-24.04` (not `ubuntu-latest`).
+  The bash scripts depend on `gh`, `jq`, and GNU `grep` with PCRE (`grep -P`).
+  If you swap the runner, verify those tools are present.
+- **Third-party actions** are pinned to a commit SHA with the version in a
+  trailing comment (`anthropics/claude-code-action@<sha>  # v1.x.y`,
+  `actions/checkout@<sha>  # v4.x.y`). When you adopt this system, keep the
+  SHA pins — they protect the high-privilege Claude action against tag
+  re-pointing.
+- **`.github/dependabot.yml`** is included and watches the `github-actions`
+  ecosystem weekly. Copy it into your repo when adopting the system so
+  upstream action bumps surface as reviewable PRs.
 
 ### Using Your Own CLAUDE.md
 
@@ -226,6 +249,7 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 
 ```
 .github/
+├── dependabot.yml              # Weekly bumps for github-actions ecosystem
 ├── review-prompts/
 │   ├── security.md
 │   ├── code-quality.md
