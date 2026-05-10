@@ -1,0 +1,75 @@
+From 4027c8b91687431105e5cfb2f5282150747e40f3 Mon Sep 17 00:00:00 2001
+From: "claude[bot]" <41898282+claude[bot]@users.noreply.github.com>
+Date: Sun, 10 May 2026 08:04:13 +0000
+Subject: [PATCH 4/4] fix(error-handling): post failure comment on
+ claude-pr-review pipeline
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Neither the `review` nor `fix-review-issues` job had a notify
+counterpart. A `/claude-fix` comment that triggered a job which then
+errored out (timeout, API error, push failure) produced no PR comment
+back — the user who asked for the fix was left waiting on silence.
+
+Fix: add a `notify-failure` job that posts a single PR comment when
+either upstream job fails or is cancelled, using the built-in
+GITHUB_TOKEN (the workflow already has `pull-requests: write`). The
+comment links to the run and tells the user how to retry.
+
+Addresses item 7 from review issue: review(error-handling): findings —
+2026-05-10.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ .github/workflows/claude-pr-review.yml | 37 ++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/.github/workflows/claude-pr-review.yml b/.github/workflows/claude-pr-review.yml
+index ed8bdcc..e80c277 100644
+--- a/.github/workflows/claude-pr-review.yml
++++ b/.github/workflows/claude-pr-review.yml
+@@ -239,3 +239,40 @@ jobs:
+             1. You read the review and fixed every finding rated LOW or above
+             2. You pushed code fixes (not reviews or comments)
+             3. ALL CI checks are green
++
++  # ─── Notify on failure ─────────────────────────────────────────────────────
++  # If either upstream job fails or is cancelled (e.g. timeout), post a single
++  # PR comment so the user who triggered the review/fix isn't left waiting on
++  # silence. Uses only the built-in GITHUB_TOKEN.
++  notify-failure:
++    needs: [review, fix-review-issues]
++    if: |
++      always() && (
++        contains(fromJSON('["failure","cancelled"]'), needs.review.result) ||
++        contains(fromJSON('["failure","cancelled"]'), needs['fix-review-issues'].result)
++      )
++    runs-on: ubuntu-latest
++    permissions:
++      pull-requests: write
++    steps:
++      - name: Post failure comment to PR
++        env:
++          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          REPO: ${{ github.repository }}
++          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
++          REVIEW_RESULT: ${{ needs.review.result }}
++          FIX_RESULT: ${{ needs['fix-review-issues'].result }}
++          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++        run: |
++          body=$(cat <<EOF
++          The Claude PR review pipeline did not complete successfully.
++
++          - review: ${REVIEW_RESULT}
++          - fix-review-issues: ${FIX_RESULT}
++          - Run: ${RUN_URL}
++
++          Re-trigger by commenting \`/claude-review\` (re-run review) or
++          \`/claude-fix\` (re-run fix only).
++          EOF
++          )
++          gh pr comment "${PR_NUMBER}" --repo "${REPO}" --body "${body}"
+-- 
+2.53.0
+

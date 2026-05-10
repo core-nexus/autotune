@@ -1,0 +1,214 @@
+From 99f36920e701183d1fee0143036c11eb1dbab957 Mon Sep 17 00:00:00 2001
+From: "claude[bot]" <41898282+claude[bot]@users.noreply.github.com>
+Date: Sun, 10 May 2026 08:04:05 +0000
+Subject: [PATCH 3/4] fix(error-handling): make codebase-review failures
+ visible by default
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The `notify` job emitted a `::warning::` annotation that nobody sees
+unless they navigate to the run page — directly violating the
+checklist's CI/CD bullet ("All scheduled cron workflows notify the
+team on failure"). Two additional gaps:
+  - `needs:` listed only `[review, fix]`, so `determine-area` failures
+    propagated as `skipped` (not `failure`) and bypassed the alert.
+  - The condition checked only `'failure'`, so 30-min review timeouts
+    and 90-min fix timeouts (likely modes for Claude API stalls)
+    showed up as `'cancelled'` and were silenced.
+  - Item 6 in the review: the trigger step computed `BRANCH` from the
+    runner clock, which drifts vs. Claude's branch when the fix step
+    crosses 00:00 UTC, producing a 404 the old script silently mapped
+    to "Skipped".
+
+Fix:
+- Add `notify-workflow-failure.sh` that opens a tracking GitHub issue
+  using only the built-in GITHUB_TOKEN — no extra secrets needed for
+  out-of-the-box alerting. README still documents the Slack swap.
+- Add `determine-area` to `notify.needs` and broaden the condition to
+  treat both `failure` and `cancelled` as alertable across all three
+  upstream jobs.
+- Compute the branch name once (`steps.branch.outputs.name`),
+  interpolate it into Claude's prompt (so Claude pushes the exact
+  expected ref), and reuse the same value in the trigger step. The
+  date is computed exactly once — no clock-drift window.
+
+Addresses items 4, 5, 6 from review issue: review(error-handling):
+findings — 2026-05-10.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ .github/workflows/codebase-review.yml         | 66 ++++++++++++++-----
+ .../scripts/notify-workflow-failure.sh        | 62 +++++++++++++++++
+ 2 files changed, 111 insertions(+), 17 deletions(-)
+ create mode 100755 .github/workflows/scripts/notify-workflow-failure.sh
+
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..119ba14 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -198,6 +198,14 @@ jobs:
+         with:
+           fetch-depth: 0
+ 
++      # Compute the branch name once so Claude's prompt and the trigger
++      # step below use the exact same value. Avoids a date drift if the
++      # fix step crosses 00:00 UTC (item 6 in the error-handling review).
++      - name: Compute branch name
++        id: branch
++        run: |
++          echo "name=review/${{ matrix.area }}-$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
++
+       - name: Fix review findings — ${{ matrix.area }}
+         uses: anthropics/claude-code-action@v1
+         with:
+@@ -259,8 +267,8 @@ jobs:
+ 
+             ## Step 4: Create branch, commit, push, and open PR
+ 
+-            1. Create branch: `review/${{ matrix.area }}-YYYY-MM-DD`
+-               (replace YYYY-MM-DD with today's date)
++            1. Create branch: `${{ steps.branch.outputs.name }}`
++               (use this exact name — the trigger-CI step expects it)
+             2. Each commit message should explain what was fixed and why.
+             3. Push: `git push -u origin HEAD`
+             4. Open a PR:
+@@ -283,28 +291,52 @@ jobs:
+ 
+             ## REMINDER: You succeed by pushing code fixes, not by writing reviews.
+ 
+-      # Trigger CI on the new PR branch (customize workflow names for your project)
++      # Trigger CI on the new PR branch (customize workflow names for your project).
++      # Uses the precomputed BRANCH from the `branch` step so it matches the name
++      # Claude was instructed to push, even if the fix step crossed midnight UTC.
+       - name: Trigger CI workflows
+         if: success()
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+-        run: |
+-          export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
+-          .github/workflows/scripts/trigger-ci-workflows.sh
++          BRANCH: ${{ steps.branch.outputs.name }}
++        run: .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
++  # The default opens a tracking GitHub issue using the built-in GITHUB_TOKEN —
++  # no extra secrets needed. Swap for Slack per the README if preferred.
++  #
++  # `determine-area` is in `needs:` because if it fails, `review` and `fix`
++  # are skipped, not failed — without it here, that path is silent.
++  # We also treat 'cancelled' as a failure so 30-min review timeouts and
++  # 90-min fix timeouts (likely modes for Claude API stalls) still alert.
+   notify:
+-    needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    needs: [determine-area, review, fix]
++    if: |
++      always() && github.event_name != 'pull_request' && (
++        needs.determine-area.result == 'failure' ||
++        needs.determine-area.result == 'cancelled' ||
++        contains(fromJSON('["failure","cancelled"]'), needs.review.result) ||
++        contains(fromJSON('["failure","cancelled"]'), needs.fix.result)
++      )
+     runs-on: ubuntu-latest
++    permissions:
++      issues: write
+     steps:
+-      - name: Notify on failure
+-        run: |
+-          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
+-          echo ""
+-          echo "To add Slack notifications, replace this step with:"
+-          echo "  uses: slackapi/slack-github-action@v3.0.1"
+-          echo "  with:"
+-          echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+-          echo "    webhook-type: incoming-webhook"
++      - name: Checkout repository
++        uses: actions/checkout@v4
++        with:
++          fetch-depth: 1
++
++      - name: Open tracking issue for failed run
++        env:
++          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          REPO: ${{ github.repository }}
++          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++          RUN_ID: ${{ github.run_id }}
++          WORKFLOW: Automated Codebase Review
++          JOB_RESULTS: |
++            determine-area=${{ needs.determine-area.result }}
++            review=${{ needs.review.result }}
++            fix=${{ needs.fix.result }}
++        run: .github/workflows/scripts/notify-workflow-failure.sh
+diff --git a/.github/workflows/scripts/notify-workflow-failure.sh b/.github/workflows/scripts/notify-workflow-failure.sh
+new file mode 100755
+index 0000000..a2aad44
+--- /dev/null
++++ b/.github/workflows/scripts/notify-workflow-failure.sh
+@@ -0,0 +1,62 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Open a GitHub issue summarizing a failed/cancelled workflow run.
++#
++# This is the default failure-notification path for the codebase-review
++# workflow. It uses only the built-in GITHUB_TOKEN — no extra secrets —
++# so a freshly-installed system has visible alerting out of the box.
++# Users who prefer Slack should swap this step per the README.
++#
++# Required env vars:
++#   GH_TOKEN
++#   REPO         - GitHub repository (owner/repo)
++#   RUN_URL      - link to the workflow run
++#   RUN_ID       - workflow run id (used in title for uniqueness)
++#   WORKFLOW     - workflow name (e.g. "Automated Codebase Review")
++#
++# Optional env vars:
++#   JOB_RESULTS  - newline-separated "<job-name>=<result>" entries to
++#                  include in the issue body. Pass any number of jobs;
++#                  unspecified jobs simply aren't listed.
++
++: "${REPO:?}" "${RUN_URL:?}" "${RUN_ID:?}" "${WORKFLOW:?}"
++
++title="${WORKFLOW} failed (run ${RUN_ID})"
++
++job_lines=""
++if [[ -n "${JOB_RESULTS:-}" ]]; then
++  while IFS= read -r line; do
++    [[ -z "${line}" ]] && continue
++    job_lines+="- ${line}"$'\n'
++  done <<< "${JOB_RESULTS}"
++fi
++
++body=$(cat <<EOF
++The **${WORKFLOW}** workflow failed or was cancelled.
++
++- Run: ${RUN_URL}
++
++Job results:
++${job_lines:-- (none reported)}
++
++See the run logs for details. Re-run from the Actions tab once the
++underlying issue is resolved.
++EOF
++)
++
++# Try with the auto-review label first; fall back to no label if the
++# label is missing in this repo. We accept best-effort here because the
++# alternative — failing the notify job — would itself be silent.
++if ! gh issue create --repo "${REPO}" \
++    --title "${title}" \
++    --body "${body}" \
++    --label auto-review 2>/tmp/notify-err.log; then
++  if grep -q -E 'label|404|not found' /tmp/notify-err.log; then
++    echo "WARN: creating issue with 'auto-review' label failed; retrying without label" >&2
++    gh issue create --repo "${REPO}" --title "${title}" --body "${body}"
++  else
++    cat /tmp/notify-err.log >&2
++    exit 1
++  fi
++fi
+-- 
+2.53.0
+

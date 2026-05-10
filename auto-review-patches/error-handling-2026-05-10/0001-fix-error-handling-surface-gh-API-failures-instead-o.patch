@@ -1,0 +1,160 @@
+From ce50d27e08781b874d0a5fab7e27909aabbb4ebc Mon Sep 17 00:00:00 2001
+From: "claude[bot]" <41898282+claude[bot]@users.noreply.github.com>
+Date: Sun, 10 May 2026 08:03:39 +0000
+Subject: [PATCH 1/4] fix(error-handling): surface gh API failures instead of
+ mapping to NONE
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The two priority-extraction scripts swallowed every gh-API error
+(`2>/dev/null` followed by `|| echo NONE`) and reported "no fix needed"
+indistinguishably from a successful clean review. A transient 5xx, an
+auth blip, or a rate-limit on the Sunday-morning 12-area burst could
+silently demote a real review to skipped — bugs the reviewer flagged
+would never reach the fix stage.
+
+Fix: add a shared lib.sh with `gh_with_retry` (3 attempts, 1s/2s
+backoff) and rewrite both scripts to fail loudly when the API call
+itself errors. The `NONE` default is now reserved for the legitimate
+"the API succeeded but no MAXIMUM_FIX_PRIORITY token was present"
+case.
+
+Addresses items 1, 2, 8 from review issue: review(error-handling):
+findings — 2026-05-10.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ .../scripts/extract-pr-review-priority.sh     | 17 ++++++++-
+ .../scripts/extract-review-priority.sh        | 26 +++++++++----
+ .github/workflows/scripts/lib.sh              | 38 +++++++++++++++++++
+ 3 files changed, 71 insertions(+), 10 deletions(-)
+ create mode 100755 .github/workflows/scripts/lib.sh
+
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..bedadc0 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -8,11 +8,24 @@ set -euo pipefail
+ #   GH_TOKEN
+ #   REPO - GitHub repository (owner/repo)
+ #   PR_NUMBER - the PR number
++#
++# Failure modes are surfaced loudly: if the GitHub API call fails (auth,
++# rate limit, 5xx, network), this script exits non-zero so the workflow
++# step fails. Only the legitimate "no priority token in any comment"
++# case maps to NONE.
+ 
+ : "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR_NUMBER:?}"
+ 
+-PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+-  --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
++# shellcheck source=lib.sh
++source "$(dirname "$0")/lib.sh"
++
++if ! BODY=$(gh_with_retry api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
++    --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body'); then
++  echo "ERROR: failed to fetch PR comments via gh api" >&2
++  exit 1
++fi
++
++PRIORITY=$(printf '%s' "${BODY}" \
+   | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..30c9a6e 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -11,9 +11,17 @@ set -euo pipefail
+ #
+ # Optional env vars:
+ #   EXECUTION_FILE - path to the claude-code-action execution file
++#
++# Failure modes are surfaced loudly: if the GitHub API fallback fails
++# (auth, rate limit, 5xx, network), this script exits non-zero so the
++# workflow step fails. Only the legitimate "no MAXIMUM_FIX_PRIORITY token
++# present in any source" case maps to NONE.
+ 
+ : "${GITHUB_OUTPUT:?}" "${REVIEW_AREA:?}" "${REPO:?}"
+ 
++# shellcheck source=lib.sh
++source "$(dirname "$0")/lib.sh"
++
+ PRIORITY=""
+ 
+ # Method 1: parse the local execution file (most reliable)
+@@ -25,16 +33,18 @@ else
+   echo "No execution file found at: ${EXECUTION_FILE:-<unset>}"
+ fi
+ 
+-# Method 2 (fallback): list recent issues via REST API
++# Method 2 (fallback): list recent issues via REST API.
+ if [[ -z "${PRIORITY}" ]]; then
+   echo "Falling back to gh issue list..."
+-  BODY=$(gh issue list \
+-    --repo "${REPO}" \
+-    --state all --limit 10 \
+-    --json title,body \
+-    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
+-    2>/dev/null || true)
+-  PRIORITY=$(echo "${BODY}" \
++  if ! BODY=$(gh_with_retry issue list \
++      --repo "${REPO}" \
++      --state all --limit 10 \
++      --json title,body \
++      --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body"); then
++    echo "ERROR: failed to fetch review issues via gh issue list" >&2
++    exit 1
++  fi
++  PRIORITY=$(printf '%s' "${BODY}" \
+     | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
+   echo "Extracted from issue list: ${PRIORITY:-<empty>}"
+ fi
+diff --git a/.github/workflows/scripts/lib.sh b/.github/workflows/scripts/lib.sh
+new file mode 100755
+index 0000000..3551b8f
+--- /dev/null
++++ b/.github/workflows/scripts/lib.sh
+@@ -0,0 +1,38 @@
++#!/usr/bin/env bash
++# Shared helpers for review workflow scripts. Source this; do not execute it.
++#
++# Public functions:
++#   gh_with_retry <args...>
++#     Invokes `gh` with up to 3 attempts and exponential backoff (1s, 2s).
++#     On success, prints captured stdout and returns 0.
++#     On final failure, prints captured output to stderr and returns gh's
++#     exit code so the caller can fail loudly.
++
++gh_with_retry() {
++  local attempt=1
++  local -r max_attempts=3
++  local delay=1
++  local out rc
++  while true; do
++    rc=0
++    # `|| rc=$?` is required: under `set -e`, an `if cmd; then` form swallows
++    # cmd's exit code (the if-statement itself exits 0 when no branch is
++    # taken), and a bare assignment would terminate the script. This idiom
++    # both preserves the real exit code and keeps the function alive.
++    out=$(gh "$@" 2>&1) || rc=$?
++    if (( rc == 0 )); then
++      printf '%s' "${out}"
++      return 0
++    fi
++    if (( attempt >= max_attempts )); then
++      printf 'ERROR: gh %s failed after %d attempts (exit %d):\n%s\n' \
++        "$*" "${attempt}" "${rc}" "${out}" >&2
++      return "${rc}"
++    fi
++    printf 'WARN: gh %s failed (attempt %d), retrying in %ds:\n%s\n' \
++      "$*" "${attempt}" "${delay}" "${out}" >&2
++    sleep "${delay}"
++    delay=$(( delay * 2 ))
++    attempt=$(( attempt + 1 ))
++  done
++}
+-- 
+2.53.0
+

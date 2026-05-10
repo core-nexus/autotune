@@ -1,0 +1,89 @@
+From 5620846d4a4e89c4737512d2319430fb2b3ac071 Mon Sep 17 00:00:00 2001
+From: "claude[bot]" <41898282+claude[bot]@users.noreply.github.com>
+Date: Sun, 10 May 2026 08:03:50 +0000
+Subject: [PATCH 2/4] fix(error-handling): distinguish 404 from real errors in
+ CI trigger
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`trigger-ci-workflows.sh` mapped every `gh workflow run` failure (auth,
+network, permissions, missing branch, real 5xx) to a single benign-
+looking `Skipped: ${workflow} (not found or not dispatchable)` line.
+Operators reading that log would chase workflow-filename typos when
+the real cause might be a missing actions:write scope, branch
+protection, or a non-existent ref (the date-mismatch case in item 6).
+
+Fix:
+- Verify the branch exists up-front via `gh api` so a missing ref is
+  reported as a branch problem rather than misclassified as 12 missing
+  workflows.
+- Capture stderr from each `gh workflow run`. Treat 404 / "Not Found" /
+  "Could not find any workflow" as a legitimate skip (project simply
+  doesn't have ci.yml / checks.yml / test.yml). Re-emit any other
+  error and mark the step as failed so the operator sees it.
+
+Addresses item 3 from review issue: review(error-handling): findings —
+2026-05-10.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ .../workflows/scripts/trigger-ci-workflows.sh | 35 +++++++++++++++++--
+ 1 file changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/.github/workflows/scripts/trigger-ci-workflows.sh b/.github/workflows/scripts/trigger-ci-workflows.sh
+index 0bb1846..920dec0 100755
+--- a/.github/workflows/scripts/trigger-ci-workflows.sh
++++ b/.github/workflows/scripts/trigger-ci-workflows.sh
+@@ -13,6 +13,15 @@ set -euo pipefail
+ #
+ # If WORKFLOWS is not set, this script will attempt to trigger common CI
+ # workflow names. Customize the WORKFLOWS variable for your project.
++#
++# Error semantics:
++#   - A 404 ("workflow does not exist in this repo") is treated as a
++#     legitimate "skip" — projects that don't have ci.yml/etc. should not
++#     fail this step.
++#   - Any other failure (auth, branch missing, 5xx, permission) is logged
++#     and causes the step to exit non-zero so the operator notices.
++#   - The branch is verified up-front so a missing ref is reported as a
++#     branch problem rather than misclassified as 12 missing workflows.
+ 
+ : "${REPO:?}" "${BRANCH:?}"
+ 
+@@ -20,8 +29,30 @@ set -euo pipefail
+ WORKFLOWS="${WORKFLOWS:-ci.yml checks.yml test.yml}"
+ 
+ echo "Triggering CI workflows on branch: ${BRANCH}"
++
++if ! branch_check=$(gh api "repos/${REPO}/branches/${BRANCH}" --silent 2>&1); then
++  if printf '%s' "${branch_check}" | grep -q -E '404|Not Found|Branch not found'; then
++    echo "ERROR: branch '${BRANCH}' does not exist on ${REPO}; cannot trigger CI." >&2
++  else
++    echo "ERROR: failed to verify branch '${BRANCH}' on ${REPO}: ${branch_check}" >&2
++  fi
++  exit 1
++fi
++
++failed=0
+ for workflow in ${WORKFLOWS}; do
+   echo "  -> ${workflow}"
+-  gh workflow run "${workflow}" --ref "${BRANCH}" --repo "${REPO}" 2>/dev/null \
+-    || echo "  Skipped: ${workflow} (not found or not dispatchable)"
++  if err=$(gh workflow run "${workflow}" --ref "${BRANCH}" --repo "${REPO}" 2>&1); then
++    echo "  Triggered: ${workflow}"
++  elif printf '%s' "${err}" | grep -q -E '404|Not Found|Could not find any workflow'; then
++    echo "  Skipped: ${workflow} (workflow not present in repo)"
++  else
++    echo "  ERROR: ${workflow}: ${err}" >&2
++    failed=1
++  fi
+ done
++
++if (( failed )); then
++  echo "ERROR: one or more workflow_dispatch calls failed for non-404 reasons." >&2
++  exit 1
++fi
+-- 
+2.53.0
+
