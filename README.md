@@ -1,4 +1,6 @@
-# Claude Code Review
+# Autotune
+
+> Automated codebase tuning via Claude — formerly `claude-code-review`.
 
 Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 12 focus areas, finds issues, and auto-fixes them via pull requests.
 
@@ -9,7 +11,7 @@ A two-stage GitHub Actions pipeline:
 1. **Review Stage** — Claude reads your entire codebase against a specific review checklist, creates a GitHub issue with findings organized by severity
 2. **Fix Stage** — If MEDIUM+ severity issues are found, Claude automatically edits code, runs your quality gates, and opens a PR with fixes
 
-It also includes a **PR review workflow** that automatically reviews every pull request and can auto-fix issues it finds.
+It also includes a **PR review workflow** that automatically reviews pull requests (Dependabot PRs are skipped by default) and can auto-fix issues it finds.
 
 ### Review Areas
 
@@ -30,7 +32,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All 12 reviews are scheduled together every **Sunday at 06:00 UTC**, but the matrix runs with `max-parallel: 3` — at most three areas execute concurrently and the rest queue up behind them. With each review allowed up to 30 minutes, a full sweep can take roughly two hours of wall-clock time. You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -46,9 +48,9 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 ---
 
 ```
-Install the claude-code-review system from https://github.com/core-nexus/claude-code-review into this repository. Here's what to do:
+Install the claude-code-review system from https://github.com/core-nexus/autotune into this repository. Here's what to do:
 
-1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
+1. Clone or fetch the review system files from https://github.com/core-nexus/autotune
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
    - .github/review-prompts/  (all 12 .md files)
@@ -66,9 +68,8 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
      CI workflow filenames (e.g., "ci.yml" or "test.yml" or "checks.yml")
    - If this project uses Slack, add the SLACK_WEBHOOK_URL secret and
      replace the notify job's echo step with the slackapi/slack-github-action
-   - Remove review areas that don't apply (e.g., remove e-commerce.md if there's
-     no payment system, remove ai-compliance.md if there's no AI features) and
-     update the workflow_dispatch options and ALL_AREAS in resolve-review-area.sh
+   - Remove review areas that don't apply to this project — see
+     "Configuration → Remove Irrelevant Review Areas" below for the exact steps
 
 5. Ensure the CLAUDE_CODE_OAUTH_TOKEN secret is set in the repo's GitHub
    Actions secrets (Settings → Secrets and variables → Actions)
@@ -109,7 +110,7 @@ schedule:
   - cron: '0 6 * * 0'  # Sunday 06:00 UTC
 ```
 
-Change to any schedule you prefer. To stagger reviews across the week (2 per day), use multiple cron entries and update `resolve-review-area.sh` to map each cron slot to a specific area.
+All cron expressions in GitHub Actions are interpreted in UTC (the schedule will not shift with your local timezone or DST), so `0 6 * * 0` always runs at 06:00 UTC. Change to any schedule you prefer. To stagger reviews across the week (2 per day), use multiple cron entries and update `resolve-review-area.sh` to map each cron slot to a specific area.
 
 ### CI Trigger Integration
 
@@ -187,22 +188,29 @@ Sunday 06:00 UTC (or manual trigger)
 ### PR Review Pipeline
 
 ```
-PR opened / ready for review / /claude-review comment
+PR opened / ready for review / /claude-review comment / /claude-fix comment
         │
         ▼
 ┌─────────────────────────────────────┐
-│  STAGE 1: REVIEW                    │
+│  STAGE 1: REVIEW (30 min timeout)   │
 │  Post review comment with findings  │
 │  Set MAXIMUM_FIX_PRIORITY           │
 └─────────────────────────────────────┘
         │
         ▼ (if LOW, MEDIUM, or HIGH)
 ┌─────────────────────────────────────┐
-│  STAGE 2: FIX                       │
+│  STAGE 2: FIX (120 min timeout)     │
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
 ```
+
+Trigger notes:
+
+- `/claude-review` — re-runs the review stage (and the fix stage if the new review reports LOW or above).
+- `/claude-fix` — skips the review and runs the fix stage directly against the existing review comment. Useful when the review is already correct and you just want it re-applied.
+- Comments authored by bot accounts (anything ending in `[bot]`) are ignored, so automated comment posters won't accidentally retrigger Claude.
+- PRs opened by `dependabot[bot]` are skipped by default. Edit `claude-pr-review.yml` to extend bot filtering or to opt other bots in or out.
 
 ### Priority Levels
 
@@ -251,7 +259,7 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 
 ## Cost Considerations
 
-Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
+Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and, in the worst case, up to 12 fix sessions per week. In practice the fix stage only runs when a review reports MEDIUM or HIGH priority (see the priority table above), so most weeks will see far fewer fix sessions than reviews. To reduce costs:
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
