@@ -249,6 +249,84 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Security Considerations
+
+The workflows in this system run `claude-code-action` with `contents: write`,
+`pull-requests: write`, `issues: write`, and a long-lived
+`CLAUDE_CODE_OAUTH_TOKEN`. Treat them as privileged automation and read this
+section before deploying to any public repository.
+
+### What ships secure-by-default
+
+- **Slash-command triggers (`/claude-review`, `/claude-fix`) require an
+  `author_association` of OWNER, MEMBER, or COLLABORATOR.** Outside
+  contributors cannot invoke the privileged fix job by commenting.
+- **Fork PRs are explicitly skipped.** The `pull_request` trigger filters
+  on `github.event.pull_request.head.repo.full_name == github.repository`
+  so fork PRs do not consume runner minutes or produce confusing failures.
+  This is independent of GitHub's secret-redaction policy for fork PRs.
+- **Priority extraction trusts only bot-authored content.** The
+  `extract-pr-review-priority.sh` and `extract-review-priority.sh` scripts
+  filter on `user.type == "Bot"` / `author.is_bot == true` so a regular
+  user cannot post `MAXIMUM_FIX_PRIORITY:HIGH` and force the fix job to
+  run.
+- **Prompts include a "Untrusted-input boundary" section** instructing
+  Claude to treat PR diffs, comments, issue bodies, and source comments
+  as data — not as instructions — and to never exfiltrate secrets.
+
+### Things you should still configure for production
+
+1. **`--dangerously-skip-permissions` is enabled by default.** This lets
+   Claude run any shell command, edit any file, and call any tool inside
+   the runner without per-call permission prompts. The flag is required
+   for the action to operate non-interactively, but it means the prompt
+   itself is the security boundary. For higher-assurance deployments,
+   replace it with an explicit `--allowed-tools` allowlist scoped to the
+   commands your workflow actually needs (e.g.
+   `Read,Edit,Write,Bash(git:*),Bash(gh:*),Bash(npm test)`).
+
+2. **Add `step-security/harden-runner` with an egress allowlist.** Even
+   if a prompt-injection attempt slips past the prompt-level guards, an
+   egress block prevents `CLAUDE_CODE_OAUTH_TOKEN` exfiltration. Pin
+   harden-runner to a SHA and allow only the hosts your workflow legit-
+   imately needs (api.github.com, api.anthropic.com, the action's CDN).
+
+3. **Pin third-party actions to commit SHAs, not floating tags.** This
+   repo currently uses `actions/checkout@v4` and
+   `anthropics/claude-code-action@v1` for ergonomic upgrades. For
+   production use, pin to a full SHA and pair with Dependabot to keep
+   pins fresh:
+
+   ```yaml
+   uses: actions/checkout@<full-sha>  # v4.1.1
+   uses: anthropics/claude-code-action@<full-sha>  # v1.x.y
+   ```
+
+4. **Wire up real failure alerting.** The default `notify` job creates a
+   GitHub issue on failure (so silent tampering is visible), but for
+   anything beyond a hobby repo you want Slack / email / PagerDuty — see
+   the Slack snippet under Configuration.
+
+5. **Do NOT change `pull_request` to `pull_request_target`.** That trigger
+   exposes secrets to fork PR code and would turn the prompt-injection
+   surface into a critical RCE vector. The workflow YAML carries an inline
+   warning to that effect; keep it there.
+
+6. **The `CLAUDE_CODE_OAUTH_TOKEN` is more sensitive than `GITHUB_TOKEN`.**
+   It is long-lived and tied to a user account; its leak is significantly
+   worse than the per-run `GITHUB_TOKEN`. Rotate it on a schedule and
+   revoke immediately if a workflow run looks tampered with.
+
+### Threat model in one sentence
+
+The attack surface is the prompt — anything that becomes part of what
+Claude reads (PR diff, comments, issue bodies, source files, fixtures)
+is attacker-controllable on a public repo, and `--dangerously-skip-
+permissions` means a successful injection has the workflow's full
+permissions. Defense in depth: who can trigger (item 1, 4), what Claude
+trusts (item 2, 3), what tools Claude can call (`--allowed-tools`), what
+the runner can talk to (`harden-runner`).
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
