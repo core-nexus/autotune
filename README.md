@@ -30,7 +30,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All reviews are dispatched together every **Sunday at 06:00 UTC** (with up to 3 areas running concurrently — see `max-parallel` in `codebase-review.yml`). You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -251,7 +251,7 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 
 ## Cost Considerations
 
-Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
+Each review area uses one Claude session (~30 min review + up to 90 min fix for the codebase-review pipeline, or up to 120 min fix for the PR-review pipeline which iterates on CI inline). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
