@@ -29,7 +29,13 @@ Incorporate your findings into the review.
   - **Limited risk**: Chatbots, content recommendation, content generation
   - **Minimal risk**: Spam filters, search ranking
 
-#### Transparency Requirements (Art. 52)
+#### Transparency Requirements (Art. 50)
+
+<!--
+Note on numbering: in the final adopted EU AI Act text these obligations
+sit in Article 50. Article 52 covers the procedure for designating GPAI
+models with systemic risk — do not conflate the two.
+-->
 
 - [ ] AI-generated content is clearly labeled as such
 - [ ] Users know when they are interacting with an AI system

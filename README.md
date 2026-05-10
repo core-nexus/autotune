@@ -249,6 +249,79 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Data Flow & Third-Party Processing
+
+This system invokes Claude (the AI model produced by Anthropic) on every
+scheduled and on-demand run. As a deployer of this workflow, you are
+responsible for ensuring your organisation, contributors, and users are
+aware of the data flow described below before installing it.
+
+**What is transmitted to Anthropic on each run:**
+
+- The full content of the repository at the commit being reviewed (the
+  workflow runs `actions/checkout@v4` and Claude can read any file in
+  the workspace). This includes any code, configuration, comments, and
+  inadvertently committed secrets.
+- For PR reviews: the PR diff, PR description, and PR comments.
+- For codebase reviews: any prior `auto-review` issue and PR bodies and
+  comments that the workflow reads as context for de-duplication.
+- The contents of any GitHub Actions logs Claude inspects for CI status
+  checks during a fix stage.
+
+**Where it goes:** Anthropic, via the Claude Code OAuth integration
+configured by the `CLAUDE_CODE_OAUTH_TOKEN` repository secret. Anthropic
+processes this data subject to their published terms.
+
+**Operational guidance for deployers:**
+
+- Review Anthropic's commercial terms and data-handling policies at
+  <https://www.anthropic.com/legal> before installing this workflow into
+  any repository that contains proprietary code, customer data, or any
+  information subject to a data-processing agreement.
+- Audit the repository for accidentally committed secrets BEFORE
+  enabling this workflow — secrets present in the working tree will be
+  transmitted on every run.
+- Keep this workflow off repositories whose contents are subject to
+  contractual confidentiality obligations that have not been mapped to
+  Anthropic's processing terms.
+- If your organisation maintains a record of data processors / sub-
+  processors, add Anthropic for the scope described above.
+
+## Known Limitations
+
+This system is itself an AI-driven tool. It has not undergone a formal
+external audit and has the following documented limitations. Maintainers
+should treat its output as an aid, not a substitute for human review.
+
+- **Findings can be silently skipped.** If the model output deviates
+  from the expected `MAXIMUM_FIX_PRIORITY:<level>` format, the priority
+  extraction emits a workflow warning and skips the fix stage for that
+  area; the warning surfaces in the run summary and in the `notify`
+  job, but a maintainer must read the run to act on it.
+- **Auto-closure of superseded issues and PRs may lose coverage.** When
+  a new review issue is filed, the workflow asks the model to close
+  prior `auto-review` issues for the same area. The prompt now requires
+  the model to enumerate which findings carry forward and which do not
+  before closing, but a misclassification by the model can still drop
+  findings between weekly runs. Inspect the closing comment on any
+  superseded issue rather than trusting it blindly.
+- **Pattern bias.** Like all LLM-based tools, the reviewer is biased
+  toward patterns common in its training data. Reviews of niche
+  frameworks, internal DSLs, or unusual architectures may be unreliable
+  and should be treated with extra scepticism.
+- **No formal bias audit.** The system has not been audited against
+  recognised AI fairness or robustness benchmarks. It does not make
+  decisions about natural persons (it reviews code), so this is a
+  lower-stakes gap, but it is documented for transparency.
+- **Stylistically consistent ≠ semantically correct.** The fix stage
+  may rewrite code to match surrounding style while introducing subtle
+  semantic changes. Every PR opened by this workflow MUST receive
+  human review before merge; do not configure auto-merge for
+  `auto-review` PRs.
+- **Third-party data flow.** Every run transmits the entire repository
+  content to Anthropic; see the "Data Flow & Third-Party Processing"
+  section above.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
