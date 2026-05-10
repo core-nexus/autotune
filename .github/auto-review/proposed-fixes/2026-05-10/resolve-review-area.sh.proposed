@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve which codebase review area(s) to run based on schedule or input.
+#
+# The list of all areas is derived from .github/review-prompts/*.md so the
+# review-prompts directory is the single source of truth. The
+# workflow_dispatch input enum in codebase-review.yml is the only other
+# place that lists areas; keep them in sync when adding/removing areas.
+#
+# Required env vars:
+#   GITHUB_OUTPUT
+#   EVENT_NAME - "workflow_dispatch" or "schedule"
+#
+# Optional env vars:
+#   INPUT_REVIEW_AREA - the area chosen by the user (workflow_dispatch only)
+#     Required when EVENT_NAME=workflow_dispatch (the workflow declares it
+#     required:true, so we enforce that here rather than silently defaulting).
+#   PROMPTS_DIR - location of review prompt files (default: .github/review-prompts)
+
+: "${GITHUB_OUTPUT:?}" "${EVENT_NAME:?}"
+
+PROMPTS_DIR="${PROMPTS_DIR:-.github/review-prompts}"
+
+# Derive the canonical area list from prompt filenames (e.g. security.md -> security).
+# Sorted for deterministic output.
+mapfile -t AREAS < <(
+  find "${PROMPTS_DIR}" -maxdepth 1 -type f -name '*.md' -printf '%f\n' \
+    | sed 's/\.md$//' \
+    | sort
+)
+
+if [[ ${#AREAS[@]} -eq 0 ]]; then
+  echo "ERROR: no review prompts found in ${PROMPTS_DIR}" >&2
+  exit 1
+fi
+
+# Build a JSON array from the bash array.
+ALL_AREAS=$(printf '%s\n' "${AREAS[@]}" | jq -R . | jq -s -c .)
+
+if [[ "${EVENT_NAME}" = "workflow_dispatch" ]]; then
+  : "${INPUT_REVIEW_AREA:?required for workflow_dispatch}"
+  AREA="${INPUT_REVIEW_AREA}"
+  if [[ "${AREA}" = "all" ]]; then
+    echo "areas_json=${ALL_AREAS}" >> "${GITHUB_OUTPUT}"
+  else
+    echo "areas_json=[\"${AREA}\"]" >> "${GITHUB_OUTPUT}"
+  fi
+else
+  # Schedule trigger: run all areas at once (Sunday morning)
+  echo "areas_json=${ALL_AREAS}" >> "${GITHUB_OUTPUT}"
+fi

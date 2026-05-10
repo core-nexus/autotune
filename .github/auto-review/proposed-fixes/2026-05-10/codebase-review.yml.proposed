@@ -1,0 +1,391 @@
+name: Automated Codebase Review
+
+# Two-stage pipeline: review -> fix (if MEDIUM+ priority).
+# Weekly deep-dive reviews across all configured focus areas.
+# Each review analyzes the full codebase for its focus area, then the
+# fix stage creates a PR with actual code changes.
+#
+# Schedule: Every Sunday at 06:00 UTC. All areas are dispatched together
+# (with up to 3 running concurrently — see max-parallel below).
+# Manual: workflow_dispatch to run any single area or all areas on demand.
+#
+# Source of truth for the area list: .github/review-prompts/*.md
+# (resolve-review-area.sh derives the list from there). The
+# workflow_dispatch enum below is the only other place that names areas;
+# keep them in sync when adding/removing areas.
+
+on:
+  schedule:
+    - cron: '0 6 * * 0'  # Every Sunday at 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      review_area:
+        description: 'Review area to run (or "all" to run every area)'
+        required: true
+        type: choice
+        options:
+          - security
+          - privacy
+          - compliance
+          - ai-compliance
+          - error-handling
+          - code-quality
+          - performance
+          - testing
+          - documentation
+          - dependency-health
+          - correctness
+          - e-commerce
+          - all
+
+concurrency:
+  group: codebase-review-${{ inputs.review_area || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  # --- Determine which review area(s) to run -------------------------------
+  determine-area:
+    runs-on: ubuntu-latest
+    outputs:
+      areas_json: ${{ steps.resolve.outputs.areas_json }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve review area from schedule or input
+        id: resolve
+        run: .github/workflows/scripts/resolve-review-area.sh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REVIEW_AREA: ${{ inputs.review_area }}
+
+  # --- Stage 1: Review -----------------------------------------------------
+  review:
+    needs: determine-area
+    runs-on: ubuntu-latest
+    # 30 min: review is bounded by issue creation; one Claude session per
+    # area scanning the codebase and writing a single GitHub issue.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+      actions: read
+    strategy:
+      fail-fast: false
+      # 3 concurrent areas: balances wall-clock time against rate limits
+      # on the Claude API and GitHub Issues API. Raise if you have higher
+      # quotas; lower if you hit 429s.
+      max-parallel: 3
+      matrix:
+        area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Review codebase — ${{ matrix.area }}
+        id: review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --dangerously-skip-permissions
+            --model opus
+            --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before reviewing. It contains the project's coding standards and conventions. Treat it as authoritative."
+
+          prompt: |
+            REPO: ${{ github.repository }}
+            REVIEW AREA: ${{ matrix.area }}
+
+            ## Stage 1: Automated Weekly Codebase Review — ${{ matrix.area }}
+
+            You are performing a scheduled deep-dive review of the ENTIRE codebase
+            focused on **${{ matrix.area }}**. This is NOT a PR review — you are
+            auditing the whole codebase on the main branch.
+
+            **Your job is to REVIEW and REPORT. Do NOT edit any files. Do NOT
+            create branches or PRs.** A separate fix stage will handle code changes
+            if your review finds issues worth fixing.
+
+            ### Step 1: Read your review instructions
+
+            Read these files carefully:
+            1. `CLAUDE.md` (if it exists) — Project standards and coding conventions
+            2. `.github/review-prompts/${{ matrix.area }}.md` — Detailed review
+               criteria and checklist for this focus area
+
+            ### Step 2: Systematic deep-dive review
+
+            Methodically review the relevant parts of the codebase against your
+            criteria. Be THOROUGH. This is a deep dive, not a surface scan. Read
+            actual code, trace data flows, check real implementations.
+
+            ### Step 3: Write your findings
+
+            Create a GitHub issue with your findings:
+            - Title: `review(${{ matrix.area }}): findings — YYYY-MM-DD`
+              (replace YYYY-MM-DD with today's date)
+            - Body: organized summary of ALL findings, grouped by severity
+
+            For each finding include:
+            - **File and line number**
+            - **What the issue is** (specific, not vague)
+            - **Why it matters** (impact if not fixed)
+            - **Suggested fix** (concrete, actionable)
+
+            Label the issue with: `auto-review`
+
+            **After creating the issue**, search for any other OPEN issues
+            with the `auto-review` label whose title starts with
+            `review(${{ matrix.area }}):` (excluding the one you just created).
+            If you find any, close them with a comment linking to the new issue:
+            `Superseded by #<new-issue-number>.`
+
+            If the review is clean with no findings, title the issue:
+            `review(${{ matrix.area }}): clean — YYYY-MM-DD`
+            and briefly summarize what was reviewed. Close the issue immediately.
+
+            ### Formatting rules
+
+            In issue bodies, NEVER use `#` followed by a number (GitHub converts
+            these to issue links). Use `item 1`, `item 3`, etc.
+
+            ## REQUIRED: Maximum Fix Priority
+
+            After all findings, you MUST end the issue body with a maximum fix
+            priority assessment.
+
+            Values:
+            - NONE — No issues found. Codebase is clean for this area.
+            - XLOW — Only trivial nits not worth an automated fix cycle.
+            - LOW — Minor issues worth fixing but not urgent.
+            - MEDIUM — Real issues that should be fixed.
+            - HIGH — Critical issues (security holes, data leaks, broken logic).
+
+            You MUST end the issue body with EXACTLY one of these on its own line:
+
+            MAXIMUM_FIX_PRIORITY:NONE
+            MAXIMUM_FIX_PRIORITY:XLOW
+            MAXIMUM_FIX_PRIORITY:LOW
+            MAXIMUM_FIX_PRIORITY:MEDIUM
+            MAXIMUM_FIX_PRIORITY:HIGH
+
+      - name: Extract priority from review output
+        id: extract-priority
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_AREA: ${{ matrix.area }}
+          EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
+          REPO: ${{ github.repository }}
+          # Persist the priority to a file so the decide-fix-areas job can
+          # consume it as an artifact (matrix job outputs collide otherwise).
+          PRIORITY_FILE: priorities/priority.txt
+        run: .github/workflows/scripts/extract-review-priority.sh
+
+      - name: Upload per-area priority artifact
+        if: always() && hashFiles('priorities/priority.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-priority-${{ matrix.area }}
+          path: priorities/priority.txt
+          retention-days: 1
+          if-no-files-found: error
+
+  # --- Decide which areas need a fix run -----------------------------------
+  # GitHub Actions does not aggregate matrix-job outputs (every matrix run
+  # writes the same key, last-writer-wins). To get a correct per-area gate
+  # we collect per-area priority artifacts here and emit the subset of
+  # areas that need fixing as the fix job's matrix.
+  decide-fix-areas:
+    needs: review
+    # Run unless the review stage was cancelled. With fail-fast: false the
+    # review job can be 'failure' when only some matrix entries failed; we
+    # still want the fix stage to run for the areas that did succeed.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    outputs:
+      fix_areas_json: ${{ steps.decide.outputs.fix_areas_json }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download priority artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: priorities
+          pattern: review-priority-*
+
+      - name: Decide fix areas
+        id: decide
+        run: .github/workflows/scripts/decide-fix-areas.sh
+
+  # --- Stage 2: Fix (only for areas with MEDIUM+ priority) -----------------
+  fix:
+    needs: decide-fix-areas
+    if: |
+      needs.decide-fix-areas.result == 'success' &&
+      needs.decide-fix-areas.outputs.fix_areas_json != '[]'
+    runs-on: ubuntu-latest
+    # 90 min: fix loop with potential CI iteration. Differs from the
+    # PR-fix workflow's 120 min because this path does not wait on CI to
+    # iterate — it just pushes a PR and triggers CI separately. Keep
+    # aligned with claude-pr-review.yml's fix-stage timeout when changing.
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    strategy:
+      fail-fast: false
+      # 1: serialize fix runs to avoid concurrent branch pushes / PR opens
+      # racing each other against the same default branch.
+      max-parallel: 1
+      matrix:
+        area: ${{ fromJson(needs.decide-fix-areas.outputs.fix_areas_json) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fix review findings — ${{ matrix.area }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --dangerously-skip-permissions
+            --model opus
+            --max-turns 250
+            --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative."
+
+          prompt: |
+            REPO: ${{ github.repository }}
+            REVIEW AREA: ${{ matrix.area }}
+
+            ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+
+            Your ONLY job is to **edit code, commit changes, and push a PR**.
+            You must NOT write another review. You must NOT post a comment listing
+            issues. You must NOT suggest changes for others to make. If you finish
+            without making any git commits, you have FAILED your task.
+
+            **Your output is CODE CHANGES, not commentary.**
+
+            ## Step 1: Gather context on what needs fixing
+
+            Read these to understand what was found:
+
+            a) **The review issue** — Find the most recent GitHub issue titled
+               `review(${{ matrix.area }}): findings —` and read its full body.
+               This contains every finding with file, line, and suggested fix.
+            b) **The review criteria** — Read `.github/review-prompts/${{ matrix.area }}.md`
+            c) **Project standards** — Read `CLAUDE.md` (if it exists).
+            d) **Your own exploration** — Read the changed files. If you spot
+               obvious issues beyond what the review found, fix those too.
+
+            ## Step 2: Fix everything
+
+            **Make actual code changes.** Edit files. Write new test cases.
+            Fix every finding from the review issue.
+
+            Rules:
+            - **Do NOT skip hard fixes.**
+            - **Tests are MANDATORY** if findings flagged missing tests, or
+              if you changed logic that lacks test coverage.
+            - **Fix tests correctly.** If a test fails:
+              - Is the implementation wrong? Fix the implementation.
+              - Is the test wrong? Fix the test.
+              - NEVER delete or skip a test just to make CI green.
+              - NEVER weaken assertions to make a test pass.
+            - **Priority order:** security > correctness > performance > tests > style.
+
+            ## Step 3: Verify quality gates pass
+
+            After making fixes, run the project's lint, type check, and test
+            commands. Fix any failures. Repeat until they all pass.
+
+            Do NOT push until all quality gates pass.
+
+            ## Step 4: Create branch, commit, push, and open PR
+
+            1. Create branch: `review/${{ matrix.area }}-YYYY-MM-DD`
+               (replace YYYY-MM-DD with today's date)
+            2. **Write the exact branch name to `branch-name.txt` at the repo
+               root** so the next workflow step can trigger CI on the right
+               branch even if you deviated from the naming convention or the
+               run spans midnight UTC. Example: `git rev-parse --abbrev-ref
+               HEAD > branch-name.txt`.
+            3. Each commit message should explain what was fixed and why.
+            4. Push: `git push -u origin HEAD`
+            5. Open a PR:
+               - Title: `review(${{ matrix.area }}): weekly codebase review fixes`
+               - Labels: `auto-review`
+               - Body: summary of what was fixed, organized by severity,
+                 referencing the review issue. End with:
+                 `Automated fix by codebase-review workflow`
+            6. **After opening the PR**, search for any other OPEN pull requests
+               with the `auto-review` label whose title starts with
+               `review(${{ matrix.area }}):` (excluding the one you just created).
+               If you find any, close them with a comment linking to the new PR:
+               `Superseded by #<new-pr-number>.`
+
+            ## Formatting rule
+
+            In commit messages and PR bodies, NEVER use `#` followed by a
+            number (GitHub converts these into issue links). Use `item 1`,
+            `item 3`, or `1.`, `3.` instead.
+
+            ## REMINDER: You succeed by pushing code fixes, not by writing reviews.
+
+      # Trigger CI on the new PR branch (customize workflow names for your project).
+      # The branch name is read from branch-name.txt that the fix step wrote,
+      # so we do not depend on the date format or naming convention staying
+      # in sync between the prompt and this step.
+      - name: Trigger CI workflows
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          AREA: ${{ matrix.area }}
+        run: |
+          if [[ -f branch-name.txt ]]; then
+            BRANCH=$(tr -d '[:space:]' < branch-name.txt)
+          else
+            # Fallback to the date-based convention. Surface a warning so a
+            # silent CI-trigger miss is at least visible in the run log.
+            BRANCH="review/${AREA}-$(date -u +%Y-%m-%d)"
+            echo "::warning::branch-name.txt missing; falling back to ${BRANCH}"
+          fi
+          if [[ -z "${BRANCH}" ]]; then
+            echo "::error::Could not resolve fix branch name; skipping CI trigger"
+            exit 1
+          fi
+          export BRANCH
+          .github/workflows/scripts/trigger-ci-workflows.sh
+
+  # --- Notify on failure (configure your notification channel) -------------
+  notify:
+    needs: [review, decide-fix-areas, fix]
+    if: |
+      always() && (
+        needs.review.result == 'failure' ||
+        needs.decide-fix-areas.result == 'failure' ||
+        needs.fix.result == 'failure'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify on failure
+        run: |
+          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Decide: ${{ needs.decide-fix-areas.result }}, Fix: ${{ needs.fix.result }}"
+          echo ""
+          echo "To add Slack notifications, replace this step with:"
+          echo "  uses: slackapi/slack-github-action@v3.0.1"
+          echo "  with:"
+          echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+          echo "    webhook-type: incoming-webhook"

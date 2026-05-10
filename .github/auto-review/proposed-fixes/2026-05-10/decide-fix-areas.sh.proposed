@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Decide which review areas need a fix-stage run by reading per-area
+# priority artifacts produced by the review stage.
+#
+# This exists because GitHub Actions does NOT aggregate matrix-job outputs:
+# every matrix run writes to the same job-level output key, so the value
+# the fix stage sees is whichever matrix run finished last. To get a
+# correct per-area gate, the review stage uploads one priority artifact
+# per area and this script consumes them all.
+#
+# Required env vars:
+#   GITHUB_OUTPUT
+#
+# Optional env vars:
+#   PRIORITIES_DIR - directory containing downloaded priority artifacts
+#                    (default: priorities). Each area writes its priority
+#                    to ${PRIORITIES_DIR}/review-priority-<area>/priority.txt
+#   FIX_PRIORITIES - space-separated list of priorities that should trigger
+#                    the fix stage (default: "HIGH MEDIUM")
+
+: "${GITHUB_OUTPUT:?}"
+
+PRIORITIES_DIR="${PRIORITIES_DIR:-priorities}"
+FIX_PRIORITIES="${FIX_PRIORITIES:-HIGH MEDIUM}"
+
+declare -a FIX_AREAS=()
+
+if [[ -d "${PRIORITIES_DIR}" ]]; then
+  shopt -s nullglob
+  for dir in "${PRIORITIES_DIR}"/review-priority-*; do
+    [[ -d "${dir}" ]] || continue
+    area="$(basename "${dir}")"
+    area="${area#review-priority-}"
+    priority_file="${dir}/priority.txt"
+    if [[ ! -f "${priority_file}" ]]; then
+      echo "  ${area}: no priority.txt — skipping"
+      continue
+    fi
+    priority="$(tr -d '[:space:]' < "${priority_file}")"
+    echo "  ${area}: ${priority}"
+    for trigger in ${FIX_PRIORITIES}; do
+      if [[ "${priority}" == "${trigger}" ]]; then
+        FIX_AREAS+=("${area}")
+        break
+      fi
+    done
+  done
+else
+  echo "No priorities directory at ${PRIORITIES_DIR} — fix stage will be skipped"
+fi
+
+if [[ ${#FIX_AREAS[@]} -eq 0 ]]; then
+  FIX_AREAS_JSON='[]'
+else
+  FIX_AREAS_JSON=$(printf '%s\n' "${FIX_AREAS[@]}" | sort | jq -R . | jq -s -c .)
+fi
+
+echo "Fix areas: ${FIX_AREAS_JSON}"
+echo "fix_areas_json=${FIX_AREAS_JSON}" >> "${GITHUB_OUTPUT}"
