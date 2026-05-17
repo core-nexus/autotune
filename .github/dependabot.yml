@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Keep pinned third-party actions current. Actions are pinned to commit SHAs
+  # (see SECURITY.md, finding M1); Dependabot bumps the SHA + version comment
+  # when a new release is published.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - auto-review
+    groups:
+      actions:
+        patterns:
+          - "*"
