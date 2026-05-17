@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # The only dependency surface in this repo is GitHub Actions. Dependabot
+  # keeps the SHA pins current while preserving the trailing version comment,
+  # so pinning to a commit SHA does not mean falling behind on patches.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "auto-review"
