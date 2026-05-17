@@ -30,9 +30,14 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All review areas are scheduled together every **Sunday at 06:00 UTC** and run with up to 3 areas in parallel (`max-parallel: 3`), so the 12 areas execute in batches rather than all at once. You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
+
+> **Note on naming:** This repository is `core-nexus/autotune`, which is the
+> internal home of this project. The canonical distribution source for the
+> review system files is `https://github.com/core-nexus/claude-code-review` —
+> the clone URLs below intentionally point there.
 
 ### Prerequisites
 
@@ -162,7 +167,7 @@ Sunday 06:00 UTC (or manual trigger)
 ┌─────────────────────────────────────┐
 │  STAGE 1: REVIEW (30 min timeout)   │
 │                                     │
-│  For each review area (in parallel):│
+│  Each area (up to 3 in parallel):  │
 │  1. Read CLAUDE.md + review prompt  │
 │  2. Deep-dive audit of codebase     │
 │  3. Create GitHub issue with        │
@@ -198,11 +203,18 @@ PR opened / ready for review / /claude-review comment
         │
         ▼ (if LOW, MEDIUM, or HIGH)
 ┌─────────────────────────────────────┐
-│  STAGE 2: FIX                       │
+│  STAGE 2: FIX (120 min timeout)     │
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
 ```
+
+**Manual triggers:**
+
+- `/claude-review` on a PR comment runs the review stage (and the fix stage
+  if the review finds LOW+ issues).
+- `/claude-fix` on a PR comment directly invokes the fix stage, skipping the
+  review gate — useful when you already know what needs fixing.
 
 ### Priority Levels
 
@@ -251,7 +263,7 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 
 ## Cost Considerations
 
-Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
+Each codebase review area uses one Claude session (~30 min review + up to 90 min fix). The separate PR review pipeline has its own fix stage with a longer 120-minute timeout. Running all 12 codebase areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
