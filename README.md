@@ -249,6 +249,38 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Data Handling & Privacy
+
+This system transmits your repository contents to a third-party LLM provider (Anthropic). Before installing on a sensitive codebase, make sure your team is comfortable with the data flow described below.
+
+### What gets sent to Anthropic
+
+On every scheduled run and every PR review, the workflows invoke the Claude API via [`claude-code-action`](https://github.com/anthropics/claude-code-action). Claude operates as an agent inside the runner with read access to the entire working tree, so any file the agent chooses to open — including source code, fixtures, comments, configuration, and test data — is sent to Anthropic as part of the prompt or tool-call results.
+
+- The codebase review reads files across the whole repository against the relevant checklist.
+- The PR review reads the diff and any files it needs context on.
+- The fix stage additionally reads the open review issue or PR comment, which itself may quote code.
+
+If your repository contains secrets-in-fixtures, real customer data, regulated content, or proprietary IP that you cannot send to a third-party API, do not install this system without first obtaining whatever DPA or approvals your organization requires. See [Anthropic's privacy policy](https://www.anthropic.com/legal/privacy) and [usage policy](https://www.anthropic.com/legal/aup) for details on how Anthropic handles data submitted to the Claude API.
+
+### Where review output is written
+
+Claude's output is written to surfaces inside your repository:
+
+- **Review issues** created by the codebase review workflow
+- **PR comments** created by the PR review workflow
+- **Commit messages and PR descriptions** created by the fix stage
+- **Actions logs** for every workflow run, which contain the full Claude transcript including tool calls and intermediate reasoning
+
+These surfaces inherit the visibility of the repository they run in. **On a public repository, every review issue, PR comment, and Actions log is world-readable** — including any code excerpts, file paths, line numbers, or descriptions of weaknesses Claude includes in its findings, before you have a chance to triage them. On a private repository, anyone with `actions: read` on the repo can read the full Claude transcript in the Actions log.
+
+### Recommendations
+
+- For public repositories handling sensitive findings (e.g., security reviews), consider whether the issue body should be created as a private security advisory instead, or whether the review area should be disabled.
+- Review your Actions log retention setting (Settings → Actions → General → Artifact and log retention) and shorten it if appropriate. The default is 90 days.
+- Audit who has `actions: read` access on the repo, since they can read full Claude transcripts.
+- If you adopt this system on a regulated codebase, treat Anthropic as a sub-processor in your data inventory.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
