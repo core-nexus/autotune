@@ -76,7 +76,13 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 6. Create the `auto-review` label in the repo:
    gh label create auto-review --description "Automated codebase review" --color "0E8A16"
 
-7. Commit everything on a feature branch and open a PR.
+7. Create two GitHub Environments with Required reviewers so the
+   autonomous fix jobs pause for human approval (Settings → Environments):
+   - codebase-review-fix
+   - pr-review-fix
+   Add at least one human as a required reviewer on each.
+
+8. Commit everything on a feature branch and open a PR.
 ```
 
 ---
@@ -87,8 +93,12 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 2. Make scripts executable: `chmod +x .github/workflows/scripts/*.sh`
 3. Add `CLAUDE_CODE_OAUTH_TOKEN` to your repo's Actions secrets
 4. Create the `auto-review` label: `gh label create auto-review --description "Automated codebase review" --color "0E8A16"`
-5. Customize (see Configuration below)
-6. Push to your default branch
+5. Create the `codebase-review-fix` and `pr-review-fix` Environments
+   (Settings → Environments) with **Required reviewers** so the
+   autonomous fix jobs pause for human approval (see "AI System
+   Disclosure" below)
+6. Customize (see Configuration below)
+7. Push to your default branch
 
 ## Configuration
 
@@ -255,7 +265,85 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
-- Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
+- Use a cheaper pinned model id (e.g. a dated Sonnet id) instead of the
+  pinned `claude-opus-4-7` in the workflow files for cheaper reviews
+  (with some quality tradeoff). Keep the id dated, not a floating alias,
+  and update the inline disclosure lines to match.
+
+## AI System Disclosure
+
+This system is an autonomous AI agent that reads code, files GitHub
+issues/comments, and—when authorized—edits code and opens pull requests.
+The following disclosure supports GPAI transparency expectations (EU AI
+Act Art. 50, effective Aug 2026), human-oversight expectations (EU AI Act
+Art. 14, NIST AI RMF), and sets correct user expectations.
+
+### Model used
+
+- **Model:** Anthropic Claude (Opus), invoked via
+  [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action).
+- **Pinned model ID:** the workflows pin a dated model id
+  (`claude-opus-4-7`) via `--model` rather than the floating `opus`
+  alias, so every automated finding and code change is attributable to a
+  specific model version. When upgrading, bump the id in
+  `codebase-review.yml` and `claude-pr-review.yml` (4 occurrences) and in
+  the disclosure lines so the audit trail stays accurate. Each generated
+  issue and review comment also states the model id inline.
+
+### Purpose
+
+Internal developer automation only: scheduled deep-dive codebase reviews
+and PR reviews, with an optional fix stage that proposes changes via pull
+request. The system handles **no end-user/personal data** and makes **no
+consequential decisions about people**, so it is minimal/limited risk
+under the EU AI Act. US state AI laws targeting high-risk consumer
+decisions (e.g. Colorado AI Act) do not apply.
+
+### Limitations
+
+AI output can be wrong. The system may:
+
+- hallucinate findings or cite the wrong file/line,
+- propose incorrect, incomplete, or insecure "fixes",
+- misjudge severity/priority.
+
+All AI-generated issues and PR-review comments carry an explicit
+AI-authorship disclosure line, and every fix PR body ends with
+`Automated fix by codebase-review workflow`. Treat all of it as advisory,
+not authoritative.
+
+### Human oversight (required configuration)
+
+Two controls keep a human in the loop. The first is automatic; the
+**second must be configured by a repo admin**:
+
+1. **No auto-merge.** The fix stage only ever opens a PR. A human must
+   review and merge it. The agent never merges or pushes to the default
+   branch.
+2. **Pre-execution approval gate.** Both fix jobs declare a GitHub
+   Environment (`codebase-review-fix` and `pr-review-fix`). Add these in
+   **Settings → Environments** with **Required reviewers** so the
+   write-access, code-modifying job pauses for explicit human approval
+   *before* it runs. Until reviewers are configured the environment adds
+   no protection, so configure it during install.
+
+### Abuse / prompt-injection hardening
+
+- The `/claude-review` and `/claude-fix` comment triggers are restricted
+  to commenters with `author_association` of `OWNER`, `MEMBER`, or
+  `COLLABORATOR`, so untrusted actors cannot launch costly autonomous
+  runs. Per-PR concurrency groups serialize runs to bound cost.
+- Review and fix prompts instruct the agent to treat reviewed code, PR
+  diffs, PR/issue comments, and issue bodies as **untrusted data, not
+  instructions**, and to ignore embedded directives (prompt injection).
+
+### Incident reporting
+
+If an automated finding or fix is wrong or harmful, comment on the
+generated issue/PR and close it; do not merge the PR. Maintainers should
+treat a confirmed bad automated change as an AI incident: revert if
+merged, and tighten the relevant review prompt or the Environment
+reviewer list.
 
 ## License
 
