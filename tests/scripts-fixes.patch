@@ -1,0 +1,56 @@
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..222f0f3 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -11,9 +11,16 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR_NUMBER:?}"
+ 
++# `tail -1` collapses multiple regex hits to a single token: the PR review
++# prompt enumerates every priority token, so a comment that echoes that list
++# yields multiple grep matches. A multi-line step output (without heredoc
++# delimiter syntax) corrupts `priority=` and silently disables the fix gate.
++# Mirrors the single-match guard in extract-review-priority.sh.
+ PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+   --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
+-  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
++  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' \
++  | tail -1 || true)
+ 
++PRIORITY="${PRIORITY:-NONE}"
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+diff --git a/.github/workflows/scripts/resolve-review-area.sh b/.github/workflows/scripts/resolve-review-area.sh
+index 71631a5..ac6fc84 100755
+--- a/.github/workflows/scripts/resolve-review-area.sh
++++ b/.github/workflows/scripts/resolve-review-area.sh
+@@ -19,6 +19,13 @@ if [[ "${EVENT_NAME}" = "workflow_dispatch" ]]; then
+   if [[ "${AREA}" = "all" ]]; then
+     echo "areas_json=${ALL_AREAS}" >> "${GITHUB_OUTPUT}"
+   else
++    # Validate against the known areas before emitting the matrix entry.
++    # Without this, a typo produces areas_json=["typo"] and fails opaquely
++    # far downstream as a missing .github/review-prompts/<area>.md.
++    if [[ "${ALL_AREAS}" != *"\"${AREA}\""* ]]; then
++      echo "Unknown review area: '${AREA}'. Must be 'all' or one of: ${ALL_AREAS}" >&2
++      exit 1
++    fi
+     echo "areas_json=[\"${AREA}\"]" >> "${GITHUB_OUTPUT}"
+   fi
+ else
+diff --git a/.github/workflows/scripts/trigger-ci-workflows.sh b/.github/workflows/scripts/trigger-ci-workflows.sh
+index 0bb1846..7824a86 100755
+--- a/.github/workflows/scripts/trigger-ci-workflows.sh
++++ b/.github/workflows/scripts/trigger-ci-workflows.sh
+@@ -14,7 +14,10 @@ set -euo pipefail
+ # If WORKFLOWS is not set, this script will attempt to trigger common CI
+ # workflow names. Customize the WORKFLOWS variable for your project.
+ 
+-: "${REPO:?}" "${BRANCH:?}"
++# GH_TOKEN is asserted here too: `gh workflow run` failures are swallowed
++# below to tolerate non-existent workflows, which would otherwise make a
++# missing/invalid token look identical to "workflow not found".
++: "${GH_TOKEN:?}" "${REPO:?}" "${BRANCH:?}"
+ 
+ # Default: try common CI workflow names. Override with WORKFLOWS env var.
+ WORKFLOWS="${WORKFLOWS:-ci.yml checks.yml test.yml}"

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Test stub for the `gh` CLI, placed first on PATH so it shadows the real
+# binary during bats runs. Behavior is driven entirely by env vars so each
+# test can script the exact response it needs:
+#
+#   GH_STUB_CALLS     - file to append each invocation's args to (one per line)
+#   GH_STUB_STDOUT    - string written verbatim to stdout
+#   GH_STUB_EXIT      - exit code (default 0)
+#   GH_STUB_FAIL_ARGS - if non-empty and a substring of the args, exit 1
+set -euo pipefail
+
+echo "$*" >> "${GH_STUB_CALLS:-/dev/null}"
+
+if [[ -n "${GH_STUB_FAIL_ARGS:-}" && "$*" == *"${GH_STUB_FAIL_ARGS}"* ]]; then
+  exit 1
+fi
+
+if [[ -n "${GH_STUB_STDOUT:-}" ]]; then
+  printf '%s' "${GH_STUB_STDOUT}"
+fi
+
+exit "${GH_STUB_EXIT:-0}"

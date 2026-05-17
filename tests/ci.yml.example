@@ -1,0 +1,34 @@
+name: CI
+
+# Copy this file to .github/workflows/ci.yml to activate it. It ships as an
+# example because the automated-fix GitHub App token cannot create workflow
+# files (missing `workflows` permission); a maintainer must move it into
+# place once.
+#
+# Gates the Bash scripts that control the review -> auto-fix pipeline.
+# Without this, a regression in those scripts ships silently.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck and bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck bats
+
+      - name: Shellcheck scripts
+        run: shellcheck .github/workflows/scripts/*.sh tests/helpers/gh
+
+      - name: Run bats suite
+        run: bats tests/
