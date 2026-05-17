@@ -257,6 +257,53 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 - Adjust the schedule (biweekly instead of weekly)
 - Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
 
+## Data Processing & Privacy
+
+This system transmits source code to a third-party processor. Before
+adopting it, understand the data flow so you can record it in your own
+compliance documentation.
+
+### What is sent, where, and why
+
+| Item | Detail |
+|---|---|
+| **What** | The full contents of the repository on the reviewed branch (every file Claude reads during a review or fix run) |
+| **Where** | The Anthropic Claude API, via the `anthropics/claude-code-action` GitHub Action invoked in `codebase-review.yml` and `claude-pr-review.yml` |
+| **Why** | To perform the automated review and fix described above — this is the sole purpose of the transmission |
+| **Authentication** | The `CLAUDE_CODE_OAUTH_TOKEN` repository secret; no other credentials are transmitted by this system |
+
+This system itself collects, stores, and processes **no personal data**.
+It has no database, account system, user-facing UI, cookies, local
+storage, or analytics. The only data flow is the source-code
+transmission described above.
+
+### Adopter responsibilities (GDPR / CCPA)
+
+Source code can incidentally contain personal data — for example in
+test fixtures, sample data, code comments, commit metadata, or
+configuration. When you adopt this system into a repository whose code
+may contain personal data, **you** (not this repository) are the
+controller for that processing. You should:
+
+- **Record the processor.** Treat Anthropic as a third-party
+  sub-processor in your GDPR Art. 30 record of processing activities
+  and ensure an appropriate data processing agreement (GDPR Art. 28)
+  and international transfer mechanism (GDPR Art. 44–49, e.g. SCCs)
+  is in place. See Anthropic's data processing terms:
+  https://www.anthropic.com/legal/commercial-terms
+- **Minimize personal data in source.** Avoid real personal data in
+  test fixtures and sample data; prefer synthetic or anonymized values.
+- **Scope the reviewed branches.** Be aware that every file on a
+  reviewed branch is transmitted; exclude repositories or branches
+  that hold sensitive personal data if that processing is not covered
+  by your agreements.
+- **Disclose where required.** If the reviewed code or its data
+  subjects fall under GDPR/CCPA, reflect this third-party processing
+  in your own privacy notice (GDPR Art. 13–14; CCPA notice at
+  collection) — this tool ships no privacy policy of its own.
+
+This section documents the data flow only; it is not legal advice.
+
 ## License
 
 MIT
