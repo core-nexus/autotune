@@ -251,11 +251,16 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 
 ## Cost Considerations
 
-Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
+Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week — the worst-case envelope is **12 Opus reviews + 12 Opus fixes** in a single Sunday run, multiplied across every repository this is installed into.
+
+The workflow's `max-parallel` settings bound *peak* concurrency (3 reviews, 1 fix at a time) but not *total* spend, and each run is bounded by `timeout-minutes` (plus a `--max-turns` cap), but there is no built-in per-week budget. **The enforced ceiling lives in GitHub, not in this workflow:** set an [Actions spending limit](https://docs.github.com/en/billing/managing-billing-for-github-actions/managing-your-spending-limit-for-github-actions) (and, if applicable, your Claude plan's usage limits) so a runaway fan-out can't exceed an amount you've chosen on purpose.
+
+To reduce costs:
 
 - Remove review areas that don't apply to your project
-- Adjust the schedule (biweekly instead of weekly)
+- Adjust the schedule (biweekly instead of weekly), or stagger areas across the week instead of running all of them on Sunday
 - Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
+- Lower `--max-turns` and `timeout-minutes` to tighten the per-run ceiling
 
 ## License
 
