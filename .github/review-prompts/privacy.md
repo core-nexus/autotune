@@ -71,3 +71,12 @@ and protected throughout the codebase.
 - **HIGH**: Missing data deletion path, excessive data collection, PII in URLs
 - **MEDIUM**: Missing consent mechanism, PII in error reports, overly broad queries
 - **LOW**: Minor data minimization improvements, documentation gaps
+
+## Reporting Findings
+
+When you write findings into a GitHub issue or PR comment, reference PII by
+location (file and line) only. If you must quote an email, name, phone number,
+IP address, or other personal data you found, MASK it (for example `john@***`) —
+NEVER reproduce the actual value. The issue tracker and PR comments are retained
+indefinitely and are often more widely visible than the code, so an unmasked
+value re-exposes the very personal data this review is meant to protect.

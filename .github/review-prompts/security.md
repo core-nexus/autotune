@@ -73,3 +73,12 @@ authorization, injection, secrets, and attack surface reduction.
 - **HIGH**: Missing ownership check, unvalidated admin action, SSRF vector
 - **MEDIUM**: Missing rate limit, overly permissive CORS, weak input validation
 - **LOW**: Informational logging of non-sensitive data, minor config hardening
+
+## Reporting Findings
+
+When you write findings into a GitHub issue or PR comment, reference sensitive
+values by location (file and line) only. If you must quote a secret, token, key,
+or other credential you found, MASK it (for example `sk-...REDACTED`) — NEVER
+reproduce the actual value. The issue tracker and PR comments are retained
+indefinitely and are often more widely visible than the code, so an unmasked
+value re-exposes the very secret this review is meant to protect.
