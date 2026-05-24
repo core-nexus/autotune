@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Extract MAXIMUM_FIX_PRIORITY from the latest PR review comment.
+#
+# Required env vars:
+#   GITHUB_OUTPUT
+#   GH_TOKEN - required: PR comments are fetched via the GitHub API
+#   REPO - GitHub repository (owner/repo)
+#   PR_NUMBER - the PR number
+
+: "${GITHUB_OUTPUT:?}" "${GH_TOKEN:?}" "${REPO:?}" "${PR_NUMBER:?}"
+
+# The only valid priority values, in one place. Used to validate the match.
+PRIORITY_ALTERNATION='(NONE|XLOW|LOW|MEDIUM|HIGH)'
+
+# Fetch ALL comment pages: a busy PR can have more than the 30 comments on the
+# first page, so the marker may not be on page 1. We do NOT swallow API errors
+# here — a failed/unauthorized request must surface (set -e) rather than be
+# silently treated as "no priority". Take the last comment that carries a marker.
+BODY=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+  --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body // empty')
+
+# Only a missing match (not an API failure) falls back to NONE.
+PRIORITY=$(printf '%s\n' "${BODY}" \
+  | grep -oP "MAXIMUM_FIX_PRIORITY:\K${PRIORITY_ALTERNATION}" \
+  | tail -1 || true)
+PRIORITY="${PRIORITY:-NONE}"
+
+echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"

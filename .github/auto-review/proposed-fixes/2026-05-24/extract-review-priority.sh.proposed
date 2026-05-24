@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Extract MAXIMUM_FIX_PRIORITY for a review area.
+#
+# The review issue body is the authoritative source: the reviewer is instructed
+# to end the body with exactly one `MAXIMUM_FIX_PRIORITY:<VALUE>` marker on its
+# own line. The local execution transcript is used only as a fallback, because
+# it also contains the prompt's list of all five marker values and is therefore
+# ambiguous to parse.
+#
+# Required env vars:
+#   GITHUB_OUTPUT
+#   REVIEW_AREA - the review area name (e.g. "security")
+#   REPO - GitHub repository (owner/repo)
+#
+# Conditionally required env vars:
+#   GH_TOKEN - needed for the issue lookup (the primary path). Not required when
+#     a usable EXECUTION_FILE is provided and contains the marker.
+#
+# Optional env vars:
+#   EXECUTION_FILE - path to the claude-code-action execution file (fallback)
+
+: "${GITHUB_OUTPUT:?}" "${REVIEW_AREA:?}" "${REPO:?}"
+
+# The only valid priority values, in one place. Used to validate every match so
+# a stray token (e.g. "HIGHEST") can never be mistaken for a real priority.
+PRIORITY_ALTERNATION='(NONE|XLOW|LOW|MEDIUM|HIGH)'
+
+# How many recent issues to scan when locating this area's review issue. We list
+# issues directly (not via the search index, which lags right after an issue is
+# created) and filter client-side, so the window must comfortably exceed the
+# number of issues created between two runs of this area. 12 areas * a few weeks.
+ISSUE_LOOKUP_LIMIT=100
+
+PRIORITY=""
+
+# Method 1 (authoritative): read the marker from the review issue body.
+# A direct issue list is read-after-write consistent, so this works even
+# immediately after the review step creates the issue.
+if [[ -n "${GH_TOKEN:-}" ]]; then
+  BODY=$(gh issue list \
+    --repo "${REPO}" \
+    --state all --limit "${ISSUE_LOOKUP_LIMIT}" \
+    --json title,body,createdAt \
+    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))]
+          | sort_by(.createdAt) | last | .body // empty" \
+    2>/dev/null || true)
+  if [[ -n "${BODY}" ]]; then
+    # The marker sits on its own line in the issue body, so anchor to it.
+    PRIORITY=$(printf '%s\n' "${BODY}" \
+      | grep -oP "^MAXIMUM_FIX_PRIORITY:\K${PRIORITY_ALTERNATION}$" \
+      | tail -1 || true)
+    echo "Extracted from review issue: ${PRIORITY:-<empty>}"
+  else
+    echo "No matching review issue found for area: ${REVIEW_AREA}"
+  fi
+else
+  echo "GH_TOKEN not set; skipping issue lookup."
+fi
+
+# Method 2 (fallback): parse the local execution transcript. It is raw JSON, so
+# the marker is not on its own physical line and cannot be line-anchored; match
+# any validated marker and take the last occurrence.
+if [[ -z "${PRIORITY}" ]] && [[ -n "${EXECUTION_FILE:-}" ]] && [[ -f "${EXECUTION_FILE}" ]]; then
+  PRIORITY=$(grep -oP "MAXIMUM_FIX_PRIORITY:\K${PRIORITY_ALTERNATION}" "${EXECUTION_FILE}" \
+    | tail -1 || true)
+  echo "Extracted from execution file: ${PRIORITY:-<empty>}"
+fi
+
+PRIORITY="${PRIORITY:-NONE}"
+echo "MAXIMUM_FIX_PRIORITY for ${REVIEW_AREA}: ${PRIORITY}"
+echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"

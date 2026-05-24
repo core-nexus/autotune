@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve which codebase review area(s) to run based on schedule or input.
+#
+# The set of review areas is derived from the prompt files in
+# .github/review-prompts/ (one "<area>.md" per area) — the single source of
+# truth. The workflow_dispatch `options` list in codebase-review.yml must be
+# kept in sync with these files by hand (GitHub Actions cannot populate choice
+# options dynamically); a mismatched single-area request fails loudly below.
+#
+# Required env vars:
+#   GITHUB_OUTPUT
+#   EVENT_NAME - "workflow_dispatch" or "schedule"
+#
+# Optional env vars:
+#   INPUT_REVIEW_AREA - the area chosen by the user (workflow_dispatch only)
+#   PROMPTS_DIR - directory of review-prompt files (default: .github/review-prompts)
+
+: "${GITHUB_OUTPUT:?}" "${EVENT_NAME:?}"
+
+PROMPTS_DIR="${PROMPTS_DIR:-.github/review-prompts}"
+
+# Build the area list from the prompt files: every "<area>.md" becomes an entry.
+mapfile -t AREAS < <(
+  find "${PROMPTS_DIR}" -maxdepth 1 -type f -name '*.md' -printf '%f\n' \
+    | sed 's/\.md$//' \
+    | sort
+)
+
+if [[ ${#AREAS[@]} -eq 0 ]]; then
+  echo "No review-prompt files (*.md) found in ${PROMPTS_DIR}" >&2
+  exit 1
+fi
+
+# Serialize the area names to a compact JSON array (jq handles escaping).
+ALL_AREAS=$(printf '%s\n' "${AREAS[@]}" | jq -R . | jq -cs .)
+
+if [[ "${EVENT_NAME}" = "workflow_dispatch" && "${INPUT_REVIEW_AREA:-all}" != "all" ]]; then
+  # A single area was requested; verify it has a prompt file so drift between
+  # the workflow_dispatch options and the prompt files fails loudly.
+  if [[ ! -f "${PROMPTS_DIR}/${INPUT_REVIEW_AREA}.md" ]]; then
+    echo "Unknown review area '${INPUT_REVIEW_AREA}': no ${PROMPTS_DIR}/${INPUT_REVIEW_AREA}.md" >&2
+    exit 1
+  fi
+  AREAS_JSON=$(jq -cn --arg a "${INPUT_REVIEW_AREA}" '[$a]')
+else
+  # Scheduled run, or workflow_dispatch with "all": run every area.
+  AREAS_JSON="${ALL_AREAS}"
+fi
+
+echo "areas_json=${AREAS_JSON}" >> "${GITHUB_OUTPUT}"
