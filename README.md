@@ -249,6 +249,16 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Data & Privacy
+
+This system sends your repository to Anthropic for processing. Adopters should understand this data flow before installing it.
+
+- **Repository contents are processed by a third party.** Every review and fix run uses [`anthropics/claude-code-action`](https://docs.anthropic.com/en/docs/claude-code/github-actions), which gives Claude access to the checked-out source tree and transmits it to Anthropic's API for processing. Any personal data that happens to live in tracked files (real names or emails in fixtures, sample data, comments, or config) is sent along with it.
+- **Commit metadata is included too.** The fix stage checks out with `fetch-depth: 0` (full git history) so it can create branches. Commit author and committer names and email addresses are personal data under regulations like GDPR, and are part of what the agent can read and process.
+- **Generated issues and PRs may quote your source.** Findings include file paths and code snippets, and on public repositories the resulting issues and PR comments are world-readable. This can move personal data from source files into a more visible, harder-to-purge location, so avoid keeping personal data in tracked files.
+
+If your repositories may contain personal data, ensure an appropriate data processing agreement (DPA) is in place with Anthropic before adopting this system, so you can meet your own transparency and processor due-diligence obligations (e.g. GDPR Art. 13/14 and Art. 28). See Anthropic's [Privacy Center](https://privacy.anthropic.com) and [Commercial Terms](https://www.anthropic.com/legal/commercial-terms) for data-handling and DPA details. Keeping personal data out of the tracked tree is the simplest way to limit exposure.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
