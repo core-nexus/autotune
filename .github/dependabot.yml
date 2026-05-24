@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Keep the GitHub Actions used by the review workflows up to date.
+  # Dependabot understands SHA-pinned actions and bumps both the SHA and the
+  # trailing "# vX.Y.Z" version comment. Updates are grouped into a single PR
+  # to limit noise in a repo that already auto-generates pull requests.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
