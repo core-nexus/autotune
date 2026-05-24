@@ -2,6 +2,8 @@
 
 Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 12 focus areas, finds issues, and auto-fixes them via pull requests.
 
+> **Note on naming:** This repository is published as `core-nexus/autotune`. The canonical distribution source for the review system files referenced in the install steps below is `core-nexus/claude-code-review` — clone or fetch from there when installing into another repo.
+
 ## What It Does
 
 A two-stage GitHub Actions pipeline:
@@ -30,7 +32,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All reviews are scheduled together every **Sunday at 06:00 UTC** and run with a concurrency cap of up to 3 areas in parallel (set by `max-parallel: 3`), so the 12 areas execute in batches rather than all at once. You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -162,7 +164,7 @@ Sunday 06:00 UTC (or manual trigger)
 ┌─────────────────────────────────────┐
 │  STAGE 1: REVIEW (30 min timeout)   │
 │                                     │
-│  For each review area (in parallel):│
+│  For each area (up to 3 at once):   │
 │  1. Read CLAUDE.md + review prompt  │
 │  2. Deep-dive audit of codebase     │
 │  3. Create GitHub issue with        │
@@ -191,18 +193,23 @@ PR opened / ready for review / /claude-review comment
         │
         ▼
 ┌─────────────────────────────────────┐
-│  STAGE 1: REVIEW                    │
+│  STAGE 1: REVIEW (30 min timeout)   │
 │  Post review comment with findings  │
 │  Set MAXIMUM_FIX_PRIORITY           │
 └─────────────────────────────────────┘
         │
         ▼ (if LOW, MEDIUM, or HIGH)
 ┌─────────────────────────────────────┐
-│  STAGE 2: FIX                       │
+│  STAGE 2: FIX (120 min timeout)     │
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
 ```
+
+**Manual triggers (PR comments):**
+
+- `/claude-review` — re-runs the review stage (which then triggers the fix stage if it finds LOW+ issues).
+- `/claude-fix` — invokes the fix stage directly, skipping the review gate. Use this when you already know fixes are needed and want to jump straight to STAGE 2.
 
 ### Priority Levels
 
