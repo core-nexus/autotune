@@ -257,6 +257,16 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 - Adjust the schedule (biweekly instead of weekly)
 - Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
 
+## Data & Privacy
+
+This system's core mechanism is sending your repository contents to Anthropic's Claude API. On every scheduled review, manual `workflow_dispatch`, pull request event, and `/claude-review` or `/claude-fix` comment, the `anthropics/claude-code-action` steps in both workflows transmit source code, comments, and test fixtures to Anthropic for analysis.
+
+What this means for adopters:
+
+- **Third-party data flow.** Your code — which may contain personal data, PII, or secrets embedded in source or fixtures — leaves your infrastructure and is processed by Anthropic. Before enabling this on a repository that handles personal data, review Anthropic's [commercial terms](https://www.anthropic.com/legal/commercial-terms) and [privacy policy](https://www.anthropic.com/legal/privacy).
+- **Data processing agreement.** If you process personal data subject to GDPR, CCPA, or similar regimes, put a Data Processing Agreement (DPA) in place with Anthropic before running these workflows.
+- **Findings can re-expose sensitive values.** Reviews write findings into GitHub issues and PR comments. On public repositories — or where the issue tracker is more widely visible than the code — quoting a secret or PII value verbatim would leak it into an indefinitely retained, more visible location. The review and fix prompts instruct Claude to reference sensitive findings by location only and to mask any quoted value (for example `sk-...REDACTED` or `john@***`); preserve that guidance if you customize the prompts.
+
 ## License
 
 MIT
