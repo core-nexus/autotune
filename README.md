@@ -242,11 +242,83 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 └── workflows/
     ├── codebase-review.yml      # Weekly deep-dive reviews
     ├── claude-pr-review.yml     # PR-level reviews
-    └── scripts/
+    └── scripts/                 # Scripts called from the workflow YAMLs
         ├── resolve-review-area.sh
         ├── extract-review-priority.sh
         ├── extract-pr-review-priority.sh
         └── trigger-ci-workflows.sh
+scripts/                         # Tested copies of the same scripts
+├── lib/
+│   └── extract-priority.sh      # Shared verdict parser
+├── resolve-review-area.sh
+├── extract-review-priority.sh
+├── extract-pr-review-priority.sh
+└── trigger-ci-workflows.sh
+test/                            # bats test suite (runs against scripts/)
+Makefile                         # make lint / make test / make check
+```
+
+## Testing
+
+The four scripts called from `.github/workflows/` are the product surface — they
+decide which review areas run, parse the verdict that gates the (expensive) fix
+stage, and trigger CI. They are covered by a `bats` suite and linted with
+`shellcheck`.
+
+```bash
+make lint    # shellcheck -x (follows sourced libs)
+make test    # bats test/
+make check   # lint + test (the CI entry point)
+```
+
+To add coverage for new behaviour, drop another `.bats` file under `test/` —
+the `Makefile` picks it up automatically.
+
+### Why two copies of the scripts?
+
+The tested copies live under `scripts/` at the repo root, and the workflows
+call `.github/workflows/scripts/`. The two should be kept in sync; the easiest
+way is `cp scripts/*.sh .github/workflows/scripts/` followed by
+`cp -r scripts/lib .github/workflows/scripts/`.
+
+This duplication exists because the GitHub App used to push automated fixes
+in this repo lacks the `workflows` permission, so it cannot modify files
+under `.github/workflows/` — including `.sh` scripts in that subtree. A human
+maintainer (or a token with `workflows` permission) can collapse the two
+locations into one in a follow-up by either (a) updating the workflow YAMLs
+to call `scripts/*.sh` directly and deleting `.github/workflows/scripts/`, or
+(b) deleting `scripts/` and granting the bot the `workflows` permission so
+future fixes can land in `.github/workflows/scripts/` directly.
+
+### Adding a CI workflow
+
+For the same App-permission reason, this repo intentionally ships without a
+`.github/workflows/ci.yml`. A human maintainer should drop in the following
+file once and the bats suite + shellcheck will run on every push and pull
+request:
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck and bats
+        run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+      - run: make check
 ```
 
 ## Cost Considerations
