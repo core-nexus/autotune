@@ -1,0 +1,194 @@
+From ccc284bc2c96f93744d569885e69f21115876a6a Mon Sep 17 00:00:00 2001
+From: "claude[bot]" <41898282+claude[bot]@users.noreply.github.com>
+Date: Sun, 31 May 2026 09:22:40 +0000
+Subject: [PATCH] fix(workflow): merge review and fix into a single matrixed
+ job
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The codebase-review.yml pipeline used two separate jobs — `review` (matrix
+over 12 areas) and `fix` (also matrix over the same 12 areas, gated on
+`needs.review.outputs.priority`). GitHub Actions does not aggregate
+matrix-job outputs: each matrix combination overwrites the same shared
+output, so `needs.review.outputs.priority` ended up being whichever
+combo finished last (race-dependent).
+
+The downstream gate had two failure modes:
+
+1. If any area finished last with NONE/LOW (e.g. documentation), the
+   entire fix stage was skipped — even for areas that actually returned
+   HIGH or MEDIUM (e.g. security).
+2. If any area finished last with HIGH or MEDIUM, the fix stage ran the
+   fix prompt for ALL 12 areas, including ones whose reviews returned
+   `clean —`, wasting compute and forcing Claude to operate on
+   already-clean or stale issues.
+
+Fix: merge `review` and `fix` into a single matrixed `review-and-fix`
+job. The priority extraction step's output is referenced at step scope
+(`steps.extract-priority.outputs.priority`), so each matrix combo's fix
+step uses its own area's priority for gating. No cross-matrix
+output sharing, no race, no wasted runs.
+
+Other adjustments:
+- Single job uses the union of both original jobs' permissions.
+- Checkout uses fetch-depth: 0 (the fix step creates branches).
+- Timeout raised to 120 minutes (sum of both former stages).
+- `notify` job updated to reference the merged job.
+
+Refs: review(correctness) findings issue, item 1 (FIX-REQUIRED).
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ .github/workflows/codebase-review.yml | 71 +++++++++++----------------
+ 1 file changed, 28 insertions(+), 43 deletions(-)
+
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..7dfb257 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -1,12 +1,20 @@
+ name: Automated Codebase Review
+ 
+-# Two-stage pipeline: review → fix (if MEDIUM+ priority).
++# Single-stage matrixed pipeline: each area is reviewed, and the fix step
++# only runs for that same area if its review returned MEDIUM+ priority.
+ # Weekly deep-dive reviews across 11 focus areas, all running Sunday at 06:00 UTC.
+-# Each review analyzes the full codebase for its focus area, then the
+-# fix stage creates a PR with actual code changes.
+ #
+ # Schedule: Every Sunday at 06:00 UTC — all areas run simultaneously.
+ # Manual: workflow_dispatch to run any single area or all areas on demand.
++#
++# Note on structure: review and fix are intentionally combined into a single
++# matrixed job. GitHub Actions does not aggregate matrix-job outputs — each
++# matrix combination overwrites a shared output. Keeping review and fix in
++# separate jobs caused the fix-stage gate to read whichever matrix combo
++# finished last (race-dependent), so the fix stage either skipped real work
++# or ran the fix prompt for every area regardless of priority. Folding the
++# priority gate into a step-level `if:` inside each matrix combo evaluates
++# the decision locally per area.
+ 
+ on:
+   schedule:
+@@ -53,13 +61,14 @@ jobs:
+           EVENT_NAME: ${{ github.event_name }}
+           INPUT_REVIEW_AREA: ${{ inputs.review_area }}
+ 
+-  # ─── Stage 1: Review ───────────────────────────────────────────────────────
+-  review:
++  # ─── Review (and conditional fix) for each area ────────────────────────────
++  review-and-fix:
+     needs: determine-area
+     runs-on: ubuntu-latest
+-    timeout-minutes: 30
++    timeout-minutes: 120
+     permissions:
+-      contents: read
++      contents: write
++      pull-requests: write
+       issues: write
+       id-token: write
+       actions: read
+@@ -68,13 +77,11 @@ jobs:
+       max-parallel: 3
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+-    outputs:
+-      priority: ${{ steps.extract-priority.outputs.priority }}
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+         with:
+-          fetch-depth: 1
++          fetch-depth: 0
+ 
+       - name: Review codebase — ${{ matrix.area }}
+         id: review
+@@ -97,8 +104,8 @@ jobs:
+             auditing the whole codebase on the main branch.
+ 
+             **Your job is to REVIEW and REPORT. Do NOT edit any files. Do NOT
+-            create branches or PRs.** A separate fix stage will handle code changes
+-            if your review finds issues worth fixing.
++            create branches or PRs.** A separate fix step in this same job will
++            handle code changes if your review finds issues worth fixing.
+ 
+             ### Step 1: Read your review instructions
+ 
+@@ -172,33 +179,11 @@ jobs:
+           REPO: ${{ github.repository }}
+         run: .github/workflows/scripts/extract-review-priority.sh
+ 
+-  # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+-  fix:
+-    needs: [determine-area, review]
+-    if: |
+-      always() &&
+-      needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
+-    runs-on: ubuntu-latest
+-    timeout-minutes: 90
+-    permissions:
+-      contents: write
+-      pull-requests: write
+-      issues: write
+-      id-token: write
+-      actions: read
+-    strategy:
+-      fail-fast: false
+-      max-parallel: 1
+-      matrix:
+-        area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+-    steps:
+-      - name: Checkout repository
+-        uses: actions/checkout@v4
+-        with:
+-          fetch-depth: 0
+-
+       - name: Fix review findings — ${{ matrix.area }}
++        id: fix
++        if: |
++          steps.extract-priority.outputs.priority == 'HIGH' ||
++          steps.extract-priority.outputs.priority == 'MEDIUM'
+         uses: anthropics/claude-code-action@v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+@@ -211,7 +196,7 @@ jobs:
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ steps.extract-priority.outputs.priority }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+@@ -285,7 +270,7 @@ jobs:
+ 
+       # Trigger CI on the new PR branch (customize workflow names for your project)
+       - name: Trigger CI workflows
+-        if: success()
++        if: steps.fix.outcome == 'success'
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+@@ -295,13 +280,13 @@ jobs:
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
+   notify:
+-    needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    needs: [review-and-fix]
++    if: always() && github.event_name != 'pull_request' && needs.review-and-fix.result == 'failure'
+     runs-on: ubuntu-latest
+     steps:
+       - name: Notify on failure
+         run: |
+-          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
++          echo "::warning::Codebase review workflow failed. Review-and-fix result: ${{ needs.review-and-fix.result }}"
+           echo ""
+           echo "To add Slack notifications, replace this step with:"
+           echo "  uses: slackapi/slack-github-action@v3.0.1"
+-- 
+2.54.0
+
