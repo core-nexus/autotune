@@ -85,7 +85,9 @@ Review the health of the project's most critical dependencies:
 
 - [ ] Dependencies come from expected registries (npmjs.com, etc.)
 - [ ] No typosquat package names (names similar to popular packages)
-- [ ] GitHub Actions use pinned versions (`@v4` not `@main`)
+- [ ] GitHub Actions are pinned to a full commit SHA (with the version
+      as a trailing comment), not a mutable tag like `@v4` or `@main`.
+      Mutable tags are a supply chain risk (see CVE-2025-30066)
 - [ ] Docker images (if any) use specific tags, not `latest`
 - [ ] No `eval()` or dynamic code execution from dependency content
 

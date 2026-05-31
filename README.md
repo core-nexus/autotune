@@ -128,7 +128,7 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
 
 ```yaml
 - name: Notify Slack on failure
-  uses: slackapi/slack-github-action@v3.0.1
+  uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95  # v3.0.1
   with:
     webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
     webhook-type: incoming-webhook
@@ -146,6 +146,14 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
             - type: "mrkdwn"
               text: "*Run:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View>"
 ```
+
+> **Action pinning convention.** All third-party GitHub Actions in this
+> project are pinned to a full commit SHA (with the human-readable
+> version as a trailing comment, e.g. `@<sha>  # v3.0.1`). This protects
+> against mutable-tag supply chain attacks (see CVE-2025-30066). If you
+> copy this snippet into your own workflow, keep the SHA — replacing it
+> with `@v3.0.1` puts you back on a mutable ref. Dependabot
+> (`.github/dependabot.yml`) keeps the SHAs up to date.
 
 ### Using Your Own CLAUDE.md
 
