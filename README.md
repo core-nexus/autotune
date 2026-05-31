@@ -249,6 +249,16 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Data & Privacy
+
+This tool sends repository contents to Anthropic's Claude API. Be aware of the following before adopting it:
+
+- **What is sent.** On every scheduled review, manual `workflow_dispatch`, PR event, or `/claude-review` / `/claude-fix` comment, the `anthropics/claude-code-action` step transmits the files Claude reads (source code, comments, tests, fixtures, and any other repo contents it explores) to Anthropic's Claude API for processing. Issue bodies and PR comments are also fetched and sent during the fix stages.
+- **Where it goes.** Anthropic processes the data under its [commercial terms](https://www.anthropic.com/legal/commercial-terms) and [privacy policy](https://www.anthropic.com/legal/privacy). Review Anthropic's current data-handling documentation for retention, training-use, and sub-processor details before enabling this tool on repositories that contain personal data, regulated data, or proprietary third-party material.
+- **If you process personal data.** If your repository (including fixtures, seeds, snapshots, or logs checked into source) contains personal data subject to GDPR, CCPA, or similar regimes, treat enabling this workflow as adding a new third-party processor. Put a Data Processing Agreement (DPA) with Anthropic in place before running it, and confirm the lawful basis for sending that data to a third party.
+- **Redaction of findings.** Review prompts instruct Claude to reference sensitive findings by file and line only and to mask any quoted secret or PII value (e.g. `sk-...REDACTED`, `j***@example.com`) rather than reproducing it in issue bodies, PR comments, commit messages, or PR descriptions. GitHub issues and PR comments are long-lived and may be more broadly visible than the source — do not let the review tool re-publish the values it is meant to flag. If you customize the review prompts, preserve this guidance.
+- **Scoping the data flow.** To reduce what is shared, remove review areas that do not apply (see Configuration), narrow the schedule, and avoid running the workflow on branches that contain unredacted secrets, customer data, or other sensitive material.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:

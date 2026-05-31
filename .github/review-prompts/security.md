@@ -67,6 +67,18 @@ authorization, injection, secrets, and attack surface reduction.
 - [ ] Webhook handlers verify signatures (Stripe, etc.)
 - [ ] GraphQL/REST endpoints enforce query depth and complexity limits
 
+## Reporting Sensitive Findings
+
+When you report a finding that involves a secret, token, credential, API
+key, password, private key, personal email, phone number, government ID, or
+other PII, reference the value by file and line only. Do NOT quote it
+verbatim in the issue body or PR comment. Mask any portion you must show
+(for example `sk-ant-...REDACTED`, `AKIA****`, `j***@example.com`). GitHub
+issues and PR comments are long-lived and may be more broadly visible than
+the source code — never re-publish through the review the value the review
+is meant to flag. If the value still appears in source, rely on the
+file:line reference; the fix stage will rotate or remove it.
+
 ## Severity Guide
 
 - **CRITICAL**: Auth bypass, data exposure, secret leak, injection vulnerability

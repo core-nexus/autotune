@@ -65,6 +65,17 @@ and protected throughout the codebase.
 - [ ] Session data, tokens, and temporary records have expiration
 - [ ] Log retention policies are appropriate for the data sensitivity
 
+## Reporting Sensitive Findings
+
+When you report a finding that involves a secret, token, credential, API
+key, password, private key, personal email, phone number, government ID, or
+other PII, reference the value by file and line only. Do NOT quote it
+verbatim in the issue body or PR comment. Mask any portion you must show
+(for example `sk-ant-...REDACTED`, `AKIA****`, `j***@example.com`,
+`+1-555-***-1234`). GitHub issues and PR comments are long-lived and may be
+more broadly visible than the source code — never re-publish through the
+review the value the review is meant to flag.
+
 ## Severity Guide
 
 - **CRITICAL**: PII in production logs, user data exposed to other users
