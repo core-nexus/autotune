@@ -151,6 +151,49 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
 
 If your project has a `CLAUDE.md` at the repo root, the review system will automatically read it and follow your project's coding standards. This is the best way to customize review behavior without editing the prompts.
 
+## AI System Disclosure
+
+This system is an autonomous AI developer-tooling pipeline that reads source code, files GitHub issues, edits code, and opens pull requests on the operator's repository.
+
+### Model used
+
+- **General-purpose AI model**: [Claude Opus](https://www.anthropic.com/claude) by Anthropic, invoked via the [`claude-code-action`](https://github.com/anthropics/claude-code-action) GitHub Action.
+- **Pinned model ID**: `claude-opus-4-7`. The exact model ID is also recorded as `MODEL_ID` in every workflow prompt and surfaced in each AI-authored issue, PR review comment, and fix-PR body so the producing model is auditable. If you upgrade, update the pin in both `codebase-review.yml` and `claude-pr-review.yml` and in the disclosure footers.
+
+### Purpose & risk classification
+
+- **Purpose**: internal developer automation — scheduled codebase reviews and per-PR reviews, with optional autonomous code fixes proposed as pull requests.
+- **Risk classification (EU AI Act)**: minimal / limited risk. The system has no end users, processes no personal data, makes no consequential decisions about consumers, and performs no biometric identification, social scoring, or profiling. It is not subject to high-risk obligations under the EU AI Act, and the relevant transparency obligation under Art. 50 (applies 2 August 2026) is satisfied by the AI-authorship disclosures embedded in every issue, review comment, and fix-PR body.
+
+### Known limitations
+
+Operators of this system should be aware:
+
+- **The model can hallucinate findings.** Treat every finding as a hypothesis to verify, not a confirmed defect.
+- **The model can produce incorrect or insecure "fixes."** Every fix PR may introduce new bugs, regressions, or security issues. Do not merge without human review.
+- **The model can be steered by untrusted text.** Even with the prompt-injection boundary built into the prompts, crafted content inside files / comments / issues / PR bodies could attempt to manipulate the agent. The actor-restriction gates on `/claude-review` / `/claude-fix` and the human-approval gate on the fix stages limit blast radius but do not eliminate the risk.
+- **The model's gating output (`MAXIMUM_FIX_PRIORITY`) is validated** against `{NONE, XLOW, LOW, MEDIUM, HIGH}`. Out-of-band tokens are dropped to `NONE` (the safe default) and a `::warning::` is emitted; a real critical finding emitted with a non-allowed token will therefore be silently downgraded by the pipeline — review the issue body, do not rely solely on the priority gate.
+
+### Human oversight model (REQUIRED)
+
+This system is **advisory**. All autonomous code-modifying runs are designed to require a human in the loop:
+
+- **No auto-merge.** The fix stages always open a PR; a human must review and merge it. Configure GitHub branch protection on your default branch to require a human review and **disable** any auto-merge automation on `auto-review` PRs.
+- **Pre-execution human gate.** Both fix jobs reference a GitHub Environment named **`ai-fix-approval`**. To enforce a human approval *before* the autonomous agent edits the repo, go to **Settings → Environments → ai-fix-approval** and add yourself (or your team) as **Required reviewers**. The fix job will then pause for approval on each run. Without required reviewers configured, GitHub auto-creates the environment and the job proceeds without a pause — that is the relaxed default; configuring required reviewers is strongly recommended (EU AI Act Art. 14 / NIST AI RMF Govern-Manage).
+- **Actor restriction on manual triggers.** `/claude-review` and `/claude-fix` comment triggers only run for comment authors with an `author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR`. Arbitrary external commenters cannot invoke these jobs.
+- **Audit trail.** Every AI decision is persisted as a GitHub issue (review findings) or a PR (proposed fix), tagged `auto-review`, and authored by the workflow's bot identity. The producing model ID is recorded in every output.
+
+### AI-authored content is labelled
+
+All content produced by this pipeline is labelled as AI-generated:
+
+- Codebase-review issue bodies end with a one-line disclosure naming the model.
+- PR-review comments end with a one-line disclosure naming the model.
+- Codebase-review fix-PR bodies end with `Automated fix by codebase-review workflow` plus a one-line disclosure naming the model.
+- PR-review fix commit messages include `Automated fix by Claude (<model id>) via claude-pr-review workflow.` in the trailer.
+
+If you fork or copy this system, keep these disclosures in place.
+
 ## How It Works
 
 ### Codebase Review Pipeline
