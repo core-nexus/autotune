@@ -249,6 +249,17 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Data & Privacy
+
+This system sends repository contents to Anthropic's API for processing. Adopters should understand the data flow before installing it on repositories that may contain personal data:
+
+- **What is sent to Anthropic.** When the workflows run, the checked-out working tree (source files, tests, fixtures, configuration, comments, and anything else tracked in the repo) is made available to Claude through the `anthropics/claude-code-action` runner. Any personal data that happens to live in the source tree leaves the GitHub environment and is processed by Anthropic as a sub-processor.
+- **Commit metadata is included.** The fix stage checks out the full git history (`fetch-depth: 0`) so it can create branches and commits. Commit author and committer names and email addresses are personal data under GDPR and are part of what the workflows expose to the processor. The review stage uses a shallow clone (`fetch-depth: 1`) and so does not pull historical commit metadata.
+- **Generated issues and PR comments may quote source content.** Findings reference file paths, line numbers, and short code snippets. On public repositories these are world-readable and harder to purge than the original source. Avoid keeping personal data, secrets, or other sensitive material in tracked files; treat the review output as a publication surface.
+- **Adopter responsibilities.** If your repository may contain personal data, ensure a Data Processing Agreement with Anthropic is in place (see the Anthropic documentation linked under [Prerequisites](#prerequisites)) and that your own Art. 13/14 transparency notices reflect this processor relationship.
+
+This repository's own code contains no end-user personal data, no cookies, and no data-subject surfaces; the items above describe how the workflows behave when installed in an adopter's repository.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
