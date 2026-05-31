@@ -1,0 +1,56 @@
+--- .github/workflows/claude-pr-review.yml	2026-05-31 08:25:13.511608132 +0000
++++ .github/scripts/workflow-patches/claude-pr-review.yml.fixed	2026-05-31 08:29:40.976520471 +0000
+@@ -130,7 +130,7 @@
+           GH_TOKEN: ${{ github.token }}
+           REPO: ${{ github.repository }}
+           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+-        run: .github/workflows/scripts/extract-pr-review-priority.sh
++        run: .github/scripts/extract-pr-review-priority.sh
+ 
+   # ─── Stage 2: Fix (only if review found issues worth fixing) ────────────────
+   fix-review-issues:
+@@ -239,3 +239,44 @@
+             1. You read the review and fixed every finding rated LOW or above
+             2. You pushed code fixes (not reviews or comments)
+             3. ALL CI checks are green
++
++  # ─── Notify on failure ─────────────────────────────────────────────────────
++  # A PR review that errors silently (e.g. claude-code-action crash, gh API
++  # outage during priority extraction) leaves the PR with no review comment,
++  # giving a false sense of "reviewed and clean". This job posts a visible
++  # PR comment when either stage fails so the author and reviewers notice
++  # that the automated review did NOT actually complete.
++  notify-failure:
++    needs: [review, fix-review-issues]
++    if: |
++      always() && (
++        needs.review.result == 'failure' ||
++        needs.fix-review-issues.result == 'failure'
++      )
++    runs-on: ubuntu-latest
++    permissions:
++      pull-requests: write
++      issues: write
++    steps:
++      - name: Comment on PR about workflow failure
++        env:
++          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          REPO: ${{ github.repository }}
++          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
++          REVIEW_RESULT: ${{ needs.review.result }}
++          FIX_RESULT: ${{ needs.fix-review-issues.result }}
++          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++        run: |
++          set -euo pipefail
++          BODY=$(cat <<EOF
++          :rotating_light: **Automated Claude review did not complete successfully.**
++
++          - review: ${REVIEW_RESULT}
++          - fix-review-issues: ${FIX_RESULT}
++
++          See [workflow run](${RUN_URL}) for details. The absence of a Claude
++          review comment on this PR is NOT a clean bill of health — the review
++          failed before producing one.
++          EOF
++          )
++          gh pr comment "${PR_NUMBER}" --repo "${REPO}" --body "${BODY}"

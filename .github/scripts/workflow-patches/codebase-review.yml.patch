@@ -1,0 +1,206 @@
+--- .github/workflows/codebase-review.yml	2026-05-31 08:25:13.511608132 +0000
++++ .github/scripts/workflow-patches/codebase-review.yml.fixed	2026-05-31 08:29:40.974948341 +0000
+@@ -48,7 +48,7 @@
+ 
+       - name: Resolve review area from schedule or input
+         id: resolve
+-        run: .github/workflows/scripts/resolve-review-area.sh
++        run: .github/scripts/resolve-review-area.sh
+         env:
+           EVENT_NAME: ${{ github.event_name }}
+           INPUT_REVIEW_AREA: ${{ inputs.review_area }}
+@@ -68,8 +68,11 @@
+       max-parallel: 3
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+-    outputs:
+-      priority: ${{ steps.extract-priority.outputs.priority }}
++    # NOTE: We intentionally do NOT declare a `priority` job output here.
++    # GitHub Actions collapses matrix-instance outputs into a single scalar
++    # (last-writer-wins, non-deterministic), which would let a clean area
++    # silently override a HIGH-priority area and skip its fix stage. The
++    # `fix` job re-extracts priority per matrix.area instead.
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+@@ -170,15 +173,17 @@
+           REVIEW_AREA: ${{ matrix.area }}
+           EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
+           REPO: ${{ github.repository }}
+-        run: .github/workflows/scripts/extract-review-priority.sh
++        run: .github/scripts/extract-review-priority.sh
+ 
+   # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+   fix:
+     needs: [determine-area, review]
+-    if: |
+-      always() &&
+-      needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
++    # Gate at the matrix level only on "review job did not hard-fail".
++    # Per-area HIGH/MEDIUM gating happens inside the matrix instance, below,
++    # by re-extracting priority from THIS area's review issue. We can't gate
++    # on `needs.review.outputs.priority` because matrix outputs collapse to a
++    # single non-deterministic value (see note on the review job above).
++    if: always() && needs.review.result != 'cancelled'
+     runs-on: ubuntu-latest
+     timeout-minutes: 90
+     permissions:
+@@ -198,7 +203,31 @@
+         with:
+           fetch-depth: 0
+ 
++      # Per-area priority gate. Re-runs the extraction (issue-list fallback
++      # path) against this area's review issue so the fix decision is made
++      # from this area's actual priority, not from the racy shared output.
++      - name: Determine priority for ${{ matrix.area }}
++        id: gate
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REVIEW_AREA: ${{ matrix.area }}
++          REPO: ${{ github.repository }}
++        run: .github/scripts/extract-review-priority.sh
++
++      - name: Decide whether to proceed
++        id: decide
++        run: |
++          priority='${{ steps.gate.outputs.priority }}'
++          if [[ "${priority}" == "HIGH" || "${priority}" == "MEDIUM" ]]; then
++            echo "proceed=true" >> "${GITHUB_OUTPUT}"
++            echo "Proceeding with fix for ${{ matrix.area }} (priority=${priority})"
++          else
++            echo "proceed=false" >> "${GITHUB_OUTPUT}"
++            echo "Skipping fix for ${{ matrix.area }} (priority=${priority})"
++          fi
++
+       - name: Fix review findings — ${{ matrix.area }}
++        if: steps.decide.outputs.proceed == 'true'
+         uses: anthropics/claude-code-action@v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+@@ -211,7 +240,7 @@
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ steps.gate.outputs.priority }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+@@ -285,26 +314,103 @@
+ 
+       # Trigger CI on the new PR branch (customize workflow names for your project)
+       - name: Trigger CI workflows
+-        if: success()
++        if: success() && steps.decide.outputs.proceed == 'true'
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+         run: |
+           export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
+-          .github/workflows/scripts/trigger-ci-workflows.sh
++          .github/scripts/trigger-ci-workflows.sh
+ 
+-  # ─── Notify on failure (configure your notification channel) ────────────────
++  # ─── Notify on failure ─────────────────────────────────────────────────────
++  # Triggers when ANY stage fails, including `determine-area` (which previously
++  # was excluded — its failures left both `review` and `fix` in `skipped` state
++  # and so this job never fired). Sends to Slack if `SLACK_WEBHOOK_URL` secret
++  # is set; otherwise opens a tracking GitHub issue so the failure is visible
++  # somewhere other than the Actions tab. A bare `::warning::` annotation
++  # alerts nobody, which defeats the purpose of a cron-scheduled job.
+   notify:
+-    needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    needs: [determine-area, review, fix]
++    if: |
++      always() && github.event_name != 'pull_request' && (
++        needs.determine-area.result == 'failure' ||
++        needs.review.result == 'failure' ||
++        needs.fix.result == 'failure'
++      )
+     runs-on: ubuntu-latest
++    permissions:
++      contents: read
++      issues: write
+     steps:
+-      - name: Notify on failure
++      - name: Check for Slack webhook
++        id: check
++        env:
++          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
++        run: |
++          if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
++            echo "has_slack=true" >> "${GITHUB_OUTPUT}"
++          else
++            echo "has_slack=false" >> "${GITHUB_OUTPUT}"
++          fi
++
++      - name: Notify via Slack
++        if: steps.check.outputs.has_slack == 'true'
++        uses: slackapi/slack-github-action@v1.27.0
++        with:
++          payload: |
++            {
++              "text": ":rotating_light: Codebase review workflow failed",
++              "blocks": [
++                {
++                  "type": "section",
++                  "text": {
++                    "type": "mrkdwn",
++                    "text": "*Codebase review workflow failed*\n*Repo:* ${{ github.repository }}\n*determine-area:* ${{ needs.determine-area.result }}\n*review:* ${{ needs.review.result }}\n*fix:* ${{ needs.fix.result }}\n*Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view logs>"
++                  }
++                }
++              ]
++            }
++        env:
++          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
++          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
++
++      # Fallback when no Slack webhook is configured: open a tracking issue.
++      # The cron run is unattended; a `::warning::` annotation in the Actions
++      # UI pages no one, so we need a persistent, surfaced artifact of the
++      # failure. The issue is labeled `auto-review` and pinned with the run
++      # link so a human notices on the issues tab.
++      - name: Open tracking issue on failure
++        if: steps.check.outputs.has_slack != 'true'
++        env:
++          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          REPO: ${{ github.repository }}
++          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++          DETERMINE_RESULT: ${{ needs.determine-area.result }}
++          REVIEW_RESULT: ${{ needs.review.result }}
++          FIX_RESULT: ${{ needs.fix.result }}
++        run: |
++          set -euo pipefail
++          TITLE="codebase-review: workflow failed on $(date -u +%Y-%m-%d)"
++          BODY=$(cat <<EOF
++          The automated codebase review workflow failed.
++
++          - determine-area: ${DETERMINE_RESULT}
++          - review: ${REVIEW_RESULT}
++          - fix: ${FIX_RESULT}
++
++          Run: ${RUN_URL}
++
++          This issue was opened automatically because no \`SLACK_WEBHOOK_URL\` secret is configured.
++          To route failures to Slack instead, add the secret and the notify job will use it.
++          EOF
++          )
++          gh issue create \
++            --repo "${REPO}" \
++            --title "${TITLE}" \
++            --body "${BODY}" \
++            --label "auto-review"
++
++      - name: Always annotate
++        if: always()
+         run: |
+-          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
+-          echo ""
+-          echo "To add Slack notifications, replace this step with:"
+-          echo "  uses: slackapi/slack-github-action@v3.0.1"
+-          echo "  with:"
+-          echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+-          echo "    webhook-type: incoming-webhook"
++          echo "::warning::Codebase review workflow failed. determine-area: ${{ needs.determine-area.result }}, review: ${{ needs.review.result }}, fix: ${{ needs.fix.result }}"
