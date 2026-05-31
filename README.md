@@ -46,9 +46,9 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 ---
 
 ```
-Install the claude-code-review system from https://github.com/core-nexus/claude-code-review into this repository. Here's what to do:
+Install the claude-code-review system from https://github.com/core-nexus/autotune into this repository. Here's what to do:
 
-1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
+1. Clone or fetch the review system files from https://github.com/core-nexus/autotune
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
    - .github/review-prompts/  (all 12 .md files)
@@ -88,7 +88,7 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 3. Add `CLAUDE_CODE_OAUTH_TOKEN` to your repo's Actions secrets
 4. Create the `auto-review` label: `gh label create auto-review --description "Automated codebase review" --color "0E8A16"`
 5. Customize (see Configuration below)
-6. Push to your default branch
+6. Commit on a feature branch and open a PR (the workflows start running once merged to your default branch)
 
 ## Configuration
 
@@ -187,7 +187,7 @@ Sunday 06:00 UTC (or manual trigger)
 ### PR Review Pipeline
 
 ```
-PR opened / ready for review / /claude-review comment
+PR opened / ready for review / /claude-review comment / /claude-fix comment
         │
         ▼
 ┌─────────────────────────────────────┐
@@ -203,6 +203,15 @@ PR opened / ready for review / /claude-review comment
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
 ```
+
+Manual triggers (comment on a PR):
+
+- `/claude-review` — re-runs Stage 1 (review) on demand
+- `/claude-fix` — skips Stage 1 and runs Stage 2 (fix) directly against the
+  most recent review comment
+
+Bot-authored events are skipped: Dependabot PRs and any other actor whose
+login ends in `[bot]` will not trigger a review or fix.
 
 ### Priority Levels
 
