@@ -251,7 +251,7 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 
 ## Cost Considerations
 
-Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
+Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all configured areas weekly means up to one review session and potentially one fix session per area per week. To reduce costs:
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
