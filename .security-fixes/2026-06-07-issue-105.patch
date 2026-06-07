@@ -1,0 +1,514 @@
+diff --git a/.github/dependabot.yml b/.github/dependabot.yml
+new file mode 100644
+index 0000000..b5149c8
+--- /dev/null
++++ b/.github/dependabot.yml
+@@ -0,0 +1,11 @@
++version: 2
++updates:
++  # Keep third-party GitHub Actions up to date. Actions are pinned to commit
++  # SHAs (with a trailing version comment) for supply-chain integrity; Dependabot
++  # bumps those pins as new releases ship so they don't go stale. See item 4.
++  - package-ecosystem: github-actions
++    directory: /
++    schedule:
++      interval: weekly
++    commit-message:
++      prefix: ci
+diff --git a/.github/workflows/claude-pr-review.yml b/.github/workflows/claude-pr-review.yml
+index ed8bdcc..183f795 100644
+--- a/.github/workflows/claude-pr-review.yml
++++ b/.github/workflows/claude-pr-review.yml
+@@ -18,10 +18,12 @@ concurrency:
+ jobs:
+   # ─── Stage 1: Review ───────────────────────────────────────────────────────
+   review:
+-    # Run on PR events (not dependabot), or on "/claude-review" comments on PRs
++    # Run on PR events (not dependabot), or on "/claude-review" comments on PRs.
++    # Comment triggers require an authorized author (OWNER/MEMBER/COLLABORATOR) so
++    # arbitrary commenters on public repos cannot invoke the agent. See item 1.
+     if: |
+       (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
+-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review'))
++      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review') && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR'))
+     runs-on: ubuntu-latest
+     timeout-minutes: 30
+     permissions:
+@@ -33,13 +35,13 @@ jobs:
+       follow_up: ${{ steps.check-followup.outputs.priority }}
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+         with:
+           fetch-depth: 1
+ 
+       - name: PR Review
+         id: review
+-        uses: anthropics/claude-code-action@v1
++        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1 # v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           track_progress: true
+@@ -135,11 +137,13 @@ jobs:
+   # ─── Stage 2: Fix (only if review found issues worth fixing) ────────────────
+   fix-review-issues:
+     needs: review
+-    # Run after review if priority is LOW/MEDIUM/HIGH, or directly on "/claude-fix"
++    # Run after review if priority is LOW/MEDIUM/HIGH, or directly on "/claude-fix".
++    # The /claude-fix path starts a write-scoped autonomous agent, so it requires an
++    # authorized author (OWNER/MEMBER/COLLABORATOR) — not just any commenter. See item 1.
+     if: |
+       always() && (
+         (needs.review.result == 'success' && (needs.review.outputs.follow_up == 'HIGH' || needs.review.outputs.follow_up == 'MEDIUM' || needs.review.outputs.follow_up == 'LOW')) ||
+-        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix'))
++        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix') && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR'))
+       )
+     runs-on: ubuntu-latest
+     timeout-minutes: 120
+@@ -151,12 +155,12 @@ jobs:
+       actions: read
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+         with:
+           fetch-depth: 1
+ 
+       - name: Fix review issues
+-        uses: anthropics/claude-code-action@v1
++        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1 # v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           track_progress: true
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..73886f1 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -44,7 +44,7 @@ jobs:
+       areas_json: ${{ steps.resolve.outputs.areas_json }}
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+ 
+       - name: Resolve review area from schedule or input
+         id: resolve
+@@ -72,13 +72,13 @@ jobs:
+       priority: ${{ steps.extract-priority.outputs.priority }}
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+         with:
+           fetch-depth: 1
+ 
+       - name: Review codebase — ${{ matrix.area }}
+         id: review
+-        uses: anthropics/claude-code-action@v1
++        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1 # v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: >-
+@@ -194,12 +194,12 @@ jobs:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Fix review findings — ${{ matrix.area }}
+-        uses: anthropics/claude-code-action@v1
++        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1 # v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: >-
+@@ -290,7 +290,8 @@ jobs:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+         run: |
+-          export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          export BRANCH
+           .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
+@@ -304,7 +305,7 @@ jobs:
+           echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
+           echo ""
+           echo "To add Slack notifications, replace this step with:"
+-          echo "  uses: slackapi/slack-github-action@v3.0.1"
++          echo "  uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1"
+           echo "  with:"
+           echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+           echo "    webhook-type: incoming-webhook"
+diff --git a/.github/workflows/scripts-ci.yml b/.github/workflows/scripts-ci.yml
+new file mode 100644
+index 0000000..5e4a187
+--- /dev/null
++++ b/.github/workflows/scripts-ci.yml
+@@ -0,0 +1,34 @@
++name: Scripts CI
++
++# Lints and tests the review helper scripts. Runs on any change to the scripts,
++# the workflows that call them, or the tests themselves.
++
++on:
++  push:
++    paths:
++      - '.github/workflows/scripts/**'
++      - '.github/workflows/*.yml'
++      - 'tests/**'
++  pull_request:
++    paths:
++      - '.github/workflows/scripts/**'
++      - '.github/workflows/*.yml'
++      - 'tests/**'
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
++
++      - name: ShellCheck helper scripts and tests
++        run: shellcheck .github/workflows/scripts/*.sh tests/*.sh
++
++      - name: Run script unit tests
++        run: bash tests/test-review-scripts.sh
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..c2d5c8b 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -3,6 +3,12 @@ set -euo pipefail
+ 
+ # Extract MAXIMUM_FIX_PRIORITY from the latest PR review comment.
+ #
++# Only comments authored by a bot account (the review bot) are trusted. A human
++# commenter must NOT be able to spoof the priority gate by posting their own
++# "MAXIMUM_FIX_PRIORITY:HIGH" / ":NONE" line — that would let an untrusted actor
++# force or suppress the write-scoped fix job (see item 2). We therefore filter
++# the comment list to author type "Bot" before reading the priority.
++#
+ # Required env vars:
+ #   GITHUB_OUTPUT
+ #   GH_TOKEN
+@@ -11,9 +17,21 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR_NUMBER:?}"
+ 
+-PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+-  --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
+-  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
++# Fetch comments once. On failure, log the reason (item 7) and fail closed to NONE
++# so a transient API error never spuriously triggers the write-scoped fix job.
++if ! COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate 2>&1); then
++  echo "::warning::Failed to fetch PR comments for ${REPO} item ${PR_NUMBER}; defaulting priority to NONE. Details: ${COMMENTS}" >&2
++  COMMENTS="[]"
++fi
++
++# Select the last bot-authored comment carrying a priority marker, then read the
++# value. Restricting to `.user.type == "Bot"` is the trust boundary for the gate.
++PRIORITY=$(printf '%s' "${COMMENTS}" \
++  | jq -r '[.[] | select(.user.type == "Bot") | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body // ""' \
++  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' \
++  || true)
++
++PRIORITY="${PRIORITY:-NONE}"
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..9c3411e 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -25,18 +25,24 @@ else
+   echo "No execution file found at: ${EXECUTION_FILE:-<unset>}"
+ fi
+ 
+-# Method 2 (fallback): list recent issues via REST API
++# Method 2 (fallback): list recent issues via REST API.
++# On failure, surface the reason (item 7) instead of silently discarding stderr,
++# then fall through to the NONE default below (fail closed — never spuriously
++# triggers the write-scoped fix job).
+ if [[ -z "${PRIORITY}" ]]; then
+   echo "Falling back to gh issue list..."
+-  BODY=$(gh issue list \
++  if BODY=$(gh issue list \
+     --repo "${REPO}" \
+     --state all --limit 10 \
+     --json title,body \
+     --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
+-    2>/dev/null || true)
+-  PRIORITY=$(echo "${BODY}" \
+-    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
+-  echo "Extracted from issue list: ${PRIORITY:-<empty>}"
++    2>&1); then
++    PRIORITY=$(printf '%s' "${BODY}" \
++      | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
++    echo "Extracted from issue list: ${PRIORITY:-<empty>}"
++  else
++    echo "::warning::gh issue list failed for ${REPO} (area ${REVIEW_AREA}); defaulting priority to NONE. Details: ${BODY}" >&2
++  fi
+ fi
+ 
+ PRIORITY="${PRIORITY:-NONE}"
+diff --git a/.github/workflows/scripts/resolve-review-area.sh b/.github/workflows/scripts/resolve-review-area.sh
+index 71631a5..88557aa 100755
+--- a/.github/workflows/scripts/resolve-review-area.sh
++++ b/.github/workflows/scripts/resolve-review-area.sh
+@@ -12,13 +12,39 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${EVENT_NAME:?}"
+ 
+-ALL_AREAS='["security","privacy","compliance","ai-compliance","error-handling","code-quality","performance","testing","documentation","dependency-health","correctness","e-commerce"]'
++# Ordered list of valid areas. Kept in sync with the workflow_dispatch choices.
++AREAS=(security privacy compliance ai-compliance error-handling code-quality \
++  performance testing documentation dependency-health correctness e-commerce)
++
++# Build the JSON array form once from the canonical list above.
++ALL_AREAS=$(printf '%s\n' "${AREAS[@]}" | jq -R . | jq -cs .)
+ 
+ if [[ "${EVENT_NAME}" = "workflow_dispatch" ]]; then
+   AREA="${INPUT_REVIEW_AREA:-security}"
++
+   if [[ "${AREA}" = "all" ]]; then
+     echo "areas_json=${ALL_AREAS}" >> "${GITHUB_OUTPUT}"
+   else
++    # Validate AREA against the allowlist before writing it to GITHUB_OUTPUT.
++    # The workflow_dispatch input is `type: choice` (server-constrained today),
++    # but validating here is defense-in-depth against GITHUB_OUTPUT injection if
++    # the input source ever changes — a newline-bearing or unknown value is
++    # rejected outright rather than echoed into a step output (see item 5).
++    valid=false
++    for known in "${AREAS[@]}"; do
++      if [[ "${AREA}" = "${known}" ]]; then
++        valid=true
++        break
++      fi
++    done
++
++    if [[ "${valid}" != "true" ]]; then
++      echo "::error::Invalid review area: '${AREA}'. Expected one of: ${AREAS[*]} or 'all'." >&2
++      exit 1
++    fi
++
++    # AREA is now known to be one of the literal allowlist entries (no newlines,
++    # no metacharacters), so embedding it in the JSON array is safe.
+     echo "areas_json=[\"${AREA}\"]" >> "${GITHUB_OUTPUT}"
+   fi
+ else
+diff --git a/.github/workflows/scripts/trigger-ci-workflows.sh b/.github/workflows/scripts/trigger-ci-workflows.sh
+index 0bb1846..e75eb29 100755
+--- a/.github/workflows/scripts/trigger-ci-workflows.sh
++++ b/.github/workflows/scripts/trigger-ci-workflows.sh
+@@ -22,6 +22,10 @@ WORKFLOWS="${WORKFLOWS:-ci.yml checks.yml test.yml}"
+ echo "Triggering CI workflows on branch: ${BRANCH}"
+ for workflow in ${WORKFLOWS}; do
+   echo "  -> ${workflow}"
+-  gh workflow run "${workflow}" --ref "${BRANCH}" --repo "${REPO}" 2>/dev/null \
+-    || echo "  Skipped: ${workflow} (not found or not dispatchable)"
++  # Capture stderr so a real failure (auth, rate limit) is surfaced rather than
++  # discarded — a "not found / not dispatchable" workflow is expected and only
++  # noted, but anything else is logged as a warning for auditability (item 7).
++  if ! err=$(gh workflow run "${workflow}" --ref "${BRANCH}" --repo "${REPO}" 2>&1); then
++    echo "  Skipped: ${workflow} (not triggered): ${err}" >&2
++  fi
+ done
+diff --git a/README.md b/README.md
+index 92d310c..e8d828f 100644
+--- a/README.md
++++ b/README.md
+@@ -218,10 +218,38 @@ PR opened / ready for review / /claude-review comment
+ 
+ 1. Create a new `.md` file in `.github/review-prompts/` with your checklist
+ 2. Add the area name to `workflow_dispatch.inputs.review_area.options` in `codebase-review.yml`
+-3. Add it to `ALL_AREAS` in `resolve-review-area.sh`
++3. Add it to the `AREAS` allowlist in `resolve-review-area.sh` (the script
++   validates the dispatch input against this list and rejects unknown values)
+ 
+ Follow the existing prompt structure: Objective, Review Checklist with checkboxes, and Severity Guide.
+ 
++## Security Model
++
++These workflows run an **autonomous agent with a write-scoped token** and the
++`--dangerously-skip-permissions` flag. Because you are copying them into your own
++repository, understand and preserve these safeguards:
++
++- **Authorization on comment triggers.** `/claude-review` and `/claude-fix` only
++  run for commenters whose `author_association` is `OWNER`, `MEMBER`, or
++  `COLLABORATOR`. On a public repo this stops arbitrary users from invoking the
++  write-scoped fix agent. **Do not weaken this gate** when adapting the workflow.
++- **Trusted priority signal.** The fix stage only runs when the
++  `MAXIMUM_FIX_PRIORITY` marker comes from a bot-authored review comment (or the
++  action's local execution file), so a human commenter cannot spoof the gate to
++  force or suppress a fix run.
++- **Prompt injection is in scope.** On incoming PRs the diff, changed files, and
++  comments are **attacker-controlled**. The review stage runs with a read-only
++  token by design; keep it that way. The fix stage holds `contents: write`, so
++  treat all PR-supplied text as untrusted and prefer running fixes only on
++  branches you trust. Narrow the token scope further if your project allows.
++- **Pinned actions.** Third-party actions are pinned to full commit SHAs (with a
++  trailing version comment) rather than mutable tags, so a force-moved upstream
++  tag cannot inject code into a job that holds write access and your OAuth
++  secret. Enable Dependabot for `github-actions` to keep these pins current.
++- **`id-token: write`.** This permission is required by `claude-code-action`'s
++  default GitHub App authentication path (it mints a GitHub OIDC token for the
++  token exchange), so it is intentionally retained despite OAuth-token auth.
++
+ ## File Structure
+ 
+ ```
+diff --git a/tests/test-review-scripts.sh b/tests/test-review-scripts.sh
+new file mode 100755
+index 0000000..28c41d2
+--- /dev/null
++++ b/tests/test-review-scripts.sh
+@@ -0,0 +1,139 @@
++#!/usr/bin/env bash
++# Self-contained tests for the security-relevant logic in the review helper
++# scripts. No external test framework — just bash + jq + gh (gh is stubbed via
++# PATH so the tests run hermetically with no network).
++#
++# Run from the repo root:  bash tests/test-review-scripts.sh
++set -uo pipefail
++
++REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++SCRIPTS="${REPO_ROOT}/.github/workflows/scripts"
++
++pass=0
++fail=0
++
++ok()   { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
++no()   { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
++
++# assert_eq <description> <expected> <actual>
++assert_eq() {
++  if [[ "$2" == "$3" ]]; then ok "$1"; else no "$1 (expected [$2], got [$3])"; fi
++}
++
++# Build a throwaway dir holding a stub `gh` so the priority extractors run
++# without touching the network. The stub echoes whatever GH_STUB_FILE contains
++# (for `gh api`) or honours GH_STUB_EXIT to simulate a failure.
++make_gh_stub() {
++  local dir
++  dir="$(mktemp -d)"
++  cat > "${dir}/gh" <<'STUB'
++#!/usr/bin/env bash
++if [[ "${GH_STUB_EXIT:-0}" != "0" ]]; then
++  echo "stub: simulated gh failure" >&2
++  exit "${GH_STUB_EXIT}"
++fi
++case "$1" in
++  api)         cat "${GH_STUB_FILE:-/dev/null}" ;;
++  issue)       cat "${GH_STUB_FILE:-/dev/null}" ;;
++  *)           ;;
++esac
++STUB
++  chmod +x "${dir}/gh"
++  echo "${dir}"
++}
++
++# ── resolve-review-area.sh ──────────────────────────────────────────────────
++echo "# resolve-review-area.sh"
++
++# run_resolve <event> <input> — runs the script, captures GITHUB_OUTPUT into the
++# global RESOLVE_OUT and the exit status into RESOLVE_RC (set in the parent shell,
++# not a subshell, so both are observable by the assertions below).
++RESOLVE_OUT=""
++RESOLVE_RC=0
++run_resolve() {
++  local out; out="$(mktemp)"
++  GITHUB_OUTPUT="${out}" EVENT_NAME="$1" INPUT_REVIEW_AREA="${2-}" \
++    bash "${SCRIPTS}/resolve-review-area.sh" >/dev/null 2>&1
++  RESOLVE_RC=$?
++  RESOLVE_OUT="$(cat "${out}")"
++  rm -f "${out}"
++}
++
++run_resolve workflow_dispatch security
++assert_eq "valid single area is emitted" 'areas_json=["security"]' "${RESOLVE_OUT}"
++assert_eq "valid single area exits 0" "0" "${RESOLVE_RC}"
++
++run_resolve workflow_dispatch ''
++assert_eq "missing input defaults to security" 'areas_json=["security"]' "${RESOLVE_OUT}"
++
++run_resolve workflow_dispatch all
++case "${RESOLVE_OUT}" in
++  'areas_json=['*'"e-commerce"]') ok "all expands to full array" ;;
++  *) no "all expands to full array (got [${RESOLVE_OUT}])" ;;
++esac
++
++# Injection / unknown values must be rejected with a non-zero exit AND must not
++# write anything to GITHUB_OUTPUT (item 5 — GITHUB_OUTPUT injection defense).
++inj=$'security"]\ninjected=evil'
++run_resolve workflow_dispatch "${inj}"
++assert_eq "injection value is rejected (non-zero exit)" "1" "${RESOLVE_RC}"
++assert_eq "injection value writes no output" "" "${RESOLVE_OUT}"
++
++run_resolve workflow_dispatch totally-unknown-area
++assert_eq "unknown area is rejected (non-zero exit)" "1" "${RESOLVE_RC}"
++
++# Schedule runs all areas regardless of input.
++run_resolve schedule ''
++out="${RESOLVE_OUT}"
++case "${out}" in
++  'areas_json=['*'"security"'*']') ok "schedule emits full area list" ;;
++  *) no "schedule emits full area list (got [${out}])" ;;
++esac
++
++# ── extract-pr-review-priority.sh ───────────────────────────────────────────
++echo "# extract-pr-review-priority.sh"
++
++run_pr_priority() {
++  # run_pr_priority <comments-json-file> -> prints the resolved priority value
++  local stub out; stub="$(make_gh_stub)"; out="$(mktemp)"
++  PATH="${stub}:${PATH}" GH_STUB_FILE="$1" GH_STUB_EXIT="${2:-0}" \
++    GITHUB_OUTPUT="${out}" GH_TOKEN=x REPO=o/r PR_NUMBER=1 \
++    bash "${SCRIPTS}/extract-pr-review-priority.sh" >/dev/null 2>&1
++  grep -oP '(?<=priority=).*' "${out}"
++  rm -rf "${stub}" "${out}"
++}
++
++tmp_bot_none="$(mktemp)"
++cat > "${tmp_bot_none}" <<'JSON'
++[
++  {"user":{"login":"review-bot","type":"Bot"},"body":"findings\nMAXIMUM_FIX_PRIORITY:NONE"},
++  {"user":{"login":"mallory","type":"User"},"body":"please run it MAXIMUM_FIX_PRIORITY:HIGH"}
++]
++JSON
++assert_eq "human cannot spoof priority over bot (item 2)" \
++  "NONE" "$(run_pr_priority "${tmp_bot_none}")"
++
++tmp_bot_high="$(mktemp)"
++cat > "${tmp_bot_high}" <<'JSON'
++[{"user":{"login":"review-bot","type":"Bot"},"body":"x\nMAXIMUM_FIX_PRIORITY:HIGH"}]
++JSON
++assert_eq "legitimate bot HIGH is honored" \
++  "HIGH" "$(run_pr_priority "${tmp_bot_high}")"
++
++tmp_human_only="$(mktemp)"
++cat > "${tmp_human_only}" <<'JSON'
++[{"user":{"login":"mallory","type":"User"},"body":"MAXIMUM_FIX_PRIORITY:HIGH"}]
++JSON
++assert_eq "human-only HIGH is ignored, defaults NONE" \
++  "NONE" "$(run_pr_priority "${tmp_human_only}")"
++
++# API failure must fail closed to NONE rather than triggering the fix job.
++assert_eq "gh api failure fails closed to NONE (item 7)" \
++  "NONE" "$(run_pr_priority "${tmp_bot_high}" 1)"
++
++rm -f "${tmp_bot_none}" "${tmp_bot_high}" "${tmp_human_only}"
++
++# ── summary ─────────────────────────────────────────────────────────────────
++echo
++echo "passed: ${pass}, failed: ${fail}"
++[[ "${fail}" -eq 0 ]]
