@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # The only dependencies in this repo are the GitHub Actions consumed by the
+  # workflows in .github/workflows/. They are pinned to full commit SHAs for
+  # supply-chain safety; Dependabot bumps those SHAs (and the trailing version
+  # comments) when new releases ship, and surfaces security advisories.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
