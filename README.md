@@ -151,6 +151,49 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
 
 If your project has a `CLAUDE.md` at the repo root, the review system will automatically read it and follow your project's coding standards. This is the best way to customize review behavior without editing the prompts.
 
+## Data & Privacy
+
+This system sends your repository's contents to a third party for processing.
+Adopters handling regulated or sensitive data should understand the data flow
+before enabling it.
+
+### What is sent to Anthropic
+
+Every run invokes [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)
+(see `codebase-review.yml` and `claude-pr-review.yml`), which transmits content
+to **Anthropic's Claude API** for processing:
+
+- **Scheduled codebase reviews** send the repository's source code (whatever the
+  review session reads while auditing — potentially the entire codebase,
+  including any PII, secrets, or customer data present in fixtures, migrations,
+  seed data, or test files).
+- **PR reviews** send the pull request diff, plus PR and issue/comment bodies and
+  the author's GitHub username (`github.actor`). A GitHub username is
+  low-sensitivity personal data under GDPR, and it — along with comment content —
+  is part of the payload sent to Anthropic.
+
+Anthropic acts as a third-party sub-processor for this data.
+
+### Recommendations for regulated data
+
+- If you process personal data subject to **GDPR, CCPA, or similar regimes**,
+  confirm that an appropriate **data processing agreement (DPA)** with Anthropic
+  is in place and review [Anthropic's data-usage and retention terms](https://www.anthropic.com/legal/commercial-terms)
+  before enabling this system on the affected repositories.
+- Avoid enabling the tool on repositories that contain regulated personal data,
+  long-lived secrets, or customer data — or scope it to exclude PII-bearing
+  paths — so that such data is not transmitted off your boundary.
+
+### Retention of review output
+
+The review stage creates GitHub issues that include file/line findings and may
+**quote source lines** verbatim. These issues persist in your repository's issue
+tracker indefinitely — the workflow only closes/supersedes older issues, it never
+deletes them. If a finding quotes a line containing sensitive data, that data is
+retained in the issue until the issue is manually deleted. Issues remain inside
+your own GitHub trust boundary, but review and prune them if findings may quote
+sensitive content.
+
 ## How It Works
 
 ### Codebase Review Pipeline
