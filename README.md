@@ -55,9 +55,10 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
    - .github/workflows/codebase-review.yml
    - .github/workflows/claude-pr-review.yml
    - .github/workflows/scripts/  (all 4 .sh files)
+   - tests/  (bats suite + gh stub that lint/test the scripts)
 
 3. Make the shell scripts executable:
-   chmod +x .github/workflows/scripts/*.sh
+   chmod +x .github/workflows/scripts/*.sh tests/stubs/gh
 
 4. Review the workflow files and adjust for this project:
    - In codebase-review.yml: verify the cron schedule works for this team
@@ -83,8 +84,8 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 
 ### Manual Install
 
-1. Copy the `.github/review-prompts/` and `.github/workflows/` directories into your repo
-2. Make scripts executable: `chmod +x .github/workflows/scripts/*.sh`
+1. Copy the `.github/review-prompts/`, `.github/workflows/`, and `tests/` directories into your repo
+2. Make scripts executable: `chmod +x .github/workflows/scripts/*.sh tests/stubs/gh`
 3. Add `CLAUDE_CODE_OAUTH_TOKEN` to your repo's Actions secrets
 4. Create the `auto-review` label: `gh label create auto-review --description "Automated codebase review" --color "0E8A16"`
 5. Customize (see Configuration below)
@@ -247,6 +248,24 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         ├── extract-review-priority.sh
         ├── extract-pr-review-priority.sh
         └── trigger-ci-workflows.sh
+
+tests/                           # bats suite for the shell scripts
+├── run.sh                       # local gate: shellcheck + bats
+├── test_helper.bash
+├── stubs/gh                     # fake gh CLI (external boundary)
+├── resolve-review-area.bats
+├── extract-review-priority.bats
+├── extract-pr-review-priority.bats
+└── trigger-ci-workflows.bats
+```
+
+### Testing the scripts
+
+The pipeline's Bash glue has a [bats](https://github.com/bats-core/bats-core)
+suite under `tests/`. Run it (with `shellcheck`) locally:
+
+```bash
+tests/run.sh
 ```
 
 ## Cost Considerations

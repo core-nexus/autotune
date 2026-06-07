@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# Test stub for the `gh` CLI. The scripts under test treat `gh` as an external
+# boundary, so the suite replaces it with this fake (placed first on PATH) and
+# drives its behavior through STUB_GH_* environment variables:
+#
+#   STUB_GH_BODY  - text printed to stdout for `gh api` / `gh issue list`
+#                   (stands in for the already jq-filtered comment/issue body)
+#   STUB_GH_LOG   - file to append `gh workflow run` invocations to
+#   STUB_GH_EXIT  - exit code returned by `gh workflow run` (default 0)
+#
+# It deliberately ignores --jq/--json filters: the production filtering is part
+# of the boundary we are stubbing; the tests assert the script's own parsing.
+set -euo pipefail
+
+subcommand="${1:-}"
+
+case "${subcommand}" in
+  api | issue)
+    printf '%s\n' "${STUB_GH_BODY:-}"
+    ;;
+  workflow)
+    if [[ -n "${STUB_GH_LOG:-}" ]]; then
+      printf '%s\n' "$*" >>"${STUB_GH_LOG}"
+    fi
+    exit "${STUB_GH_EXIT:-0}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
