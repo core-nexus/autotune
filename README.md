@@ -1,5 +1,7 @@
 # Claude Code Review
 
+> Distributed as the **`autotune`** repository (`core-nexus/autotune`) — the project formerly known as `claude-code-review`.
+
 Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 12 focus areas, finds issues, and auto-fixes them via pull requests.
 
 ## What It Does
@@ -9,7 +11,7 @@ A two-stage GitHub Actions pipeline:
 1. **Review Stage** — Claude reads your entire codebase against a specific review checklist, creates a GitHub issue with findings organized by severity
 2. **Fix Stage** — If MEDIUM+ severity issues are found, Claude automatically edits code, runs your quality gates, and opens a PR with fixes
 
-It also includes a **PR review workflow** that automatically reviews every pull request and can auto-fix issues it finds.
+It also includes a **PR review workflow** that automatically reviews pull requests when they are opened or marked ready for review (excluding dependabot), and can auto-fix issues it finds.
 
 ### Review Areas
 
@@ -30,7 +32,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All reviews are scheduled together every **Sunday at 06:00 UTC**, running up to 3 areas at a time (the rest queue). You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -46,9 +48,9 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 ---
 
 ```
-Install the claude-code-review system from https://github.com/core-nexus/claude-code-review into this repository. Here's what to do:
+Install the autotune codebase review system from https://github.com/core-nexus/autotune into this repository. Here's what to do:
 
-1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
+1. Clone or fetch the review system files from https://github.com/core-nexus/autotune
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
    - .github/review-prompts/  (all 12 .md files)
@@ -196,13 +198,16 @@ PR opened / ready for review / /claude-review comment
 │  Set MAXIMUM_FIX_PRIORITY           │
 └─────────────────────────────────────┘
         │
-        ▼ (if LOW, MEDIUM, or HIGH)
+        ▼ (if LOW, MEDIUM, or HIGH — or /claude-fix comment)
 ┌─────────────────────────────────────┐
 │  STAGE 2: FIX                       │
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
 ```
+
+**Manual triggers:** comment `/claude-review` on a PR to run the review stage
+on demand, or `/claude-fix` to run the fix stage directly (skipping review).
 
 ### Priority Levels
 
