@@ -1,0 +1,131 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..dd60eab
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,24 @@
++name: CI
++
++# Lint and test the review helper scripts. Runs on PRs and pushes to main, and
++# is workflow_dispatch-able so the fix stage's trigger-ci-workflows.sh can kick
++# it off on a review branch.
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++  workflow_dispatch:
++
++jobs:
++  shell:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: ShellCheck helper scripts
++        run: shellcheck .github/scripts/*.sh .github/scripts/tests/*.sh
++
++      - name: Run script tests
++        run: .github/scripts/tests/run-tests.sh
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..e5bf294 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -48,7 +48,7 @@ jobs:
+ 
+       - name: Resolve review area from schedule or input
+         id: resolve
+-        run: .github/workflows/scripts/resolve-review-area.sh
++        run: .github/scripts/resolve-review-area.sh
+         env:
+           EVENT_NAME: ${{ github.event_name }}
+           INPUT_REVIEW_AREA: ${{ inputs.review_area }}
+@@ -170,7 +170,7 @@ jobs:
+           REVIEW_AREA: ${{ matrix.area }}
+           EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
+           REPO: ${{ github.repository }}
+-        run: .github/workflows/scripts/extract-review-priority.sh
++        run: .github/scripts/extract-review-priority.sh
+ 
+   # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+   fix:
+@@ -290,21 +290,67 @@ jobs:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+         run: |
+-          export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
+-          .github/workflows/scripts/trigger-ci-workflows.sh
++          BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          export BRANCH
++          .github/scripts/trigger-ci-workflows.sh
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
++  # `determine-area` is included in `needs` on purpose: if it fails, `review`
++  # and `fix` are *skipped* (result "skipped", not "failure"), so without this
++  # the entire weekly review would fail silently. We also treat "cancelled" as a
++  # failure to surface. The alert opens a tracking issue so a failed scheduled
++  # run is visible even when nobody is watching the Actions tab.
+   notify:
+-    needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    needs: [determine-area, review, fix]
++    if: |
++      always() &&
++      github.event_name != 'pull_request' &&
++      (needs.determine-area.result == 'failure' ||
++       needs.determine-area.result == 'cancelled' ||
++       needs.review.result == 'failure' ||
++       needs.review.result == 'cancelled' ||
++       needs.fix.result == 'failure' ||
++       needs.fix.result == 'cancelled')
+     runs-on: ubuntu-latest
++    permissions:
++      issues: write
+     steps:
+       - name: Notify on failure
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPO: ${{ github.repository }}
++          RUN_ID: ${{ github.run_id }}
++          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++          DETERMINE_RESULT: ${{ needs.determine-area.result }}
++          REVIEW_RESULT: ${{ needs.review.result }}
++          FIX_RESULT: ${{ needs.fix.result }}
+         run: |
+-          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
+-          echo ""
+-          echo "To add Slack notifications, replace this step with:"
+-          echo "  uses: slackapi/slack-github-action@v3.0.1"
+-          echo "  with:"
+-          echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+-          echo "    webhook-type: incoming-webhook"
++          echo "::error::Codebase review workflow failed (determine-area: ${DETERMINE_RESULT}, review: ${REVIEW_RESULT}, fix: ${FIX_RESULT}). See ${RUN_URL}"
++
++          # Open a tracking issue as the real alert channel. A bare
++          # echo "::warning::" in a cron run that nobody watches is invisible.
++          body=$(printf '%s\n' \
++            "The scheduled codebase-review workflow failed." \
++            "" \
++            "- determine-area: ${DETERMINE_RESULT}" \
++            "- review: ${REVIEW_RESULT}" \
++            "- fix: ${FIX_RESULT}" \
++            "" \
++            "Run: ${RUN_URL}" \
++            "" \
++            "Automated alert by codebase-review workflow.")
++
++          if ! gh issue create \
++            --repo "${REPO}" \
++            --title "codebase-review workflow failed — run ${RUN_ID}" \
++            --label auto-review \
++            --body "${body}"; then
++            echo "::error::Failed to open a tracking issue for the codebase-review failure. See ${RUN_URL}"
++            exit 1
++          fi
++
++          # To additionally route alerts to Slack, add a step such as:
++          #   uses: slackapi/slack-github-action@v3.0.1
++          #   with:
++          #     webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
++          #     webhook-type: incoming-webhook
