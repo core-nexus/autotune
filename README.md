@@ -54,10 +54,11 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
    - .github/review-prompts/  (all 12 .md files)
    - .github/workflows/codebase-review.yml
    - .github/workflows/claude-pr-review.yml
-   - .github/workflows/scripts/  (all 4 .sh files)
+   - .github/workflows/scripts-test.yml
+   - .github/workflows/scripts/  (all .sh files, including the lib/ subdirectory)
 
 3. Make the shell scripts executable:
-   chmod +x .github/workflows/scripts/*.sh
+   chmod +x .github/workflows/scripts/*.sh .github/workflows/scripts/lib/*.sh
 
 4. Review the workflow files and adjust for this project:
    - In codebase-review.yml: verify the cron schedule works for this team
@@ -76,7 +77,13 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 6. Create the `auto-review` label in the repo:
    gh label create auto-review --description "Automated codebase review" --color "0E8A16"
 
-7. Commit everything on a feature branch and open a PR.
+7. Create a GitHub Environment named `codebase-review-fix` and add required
+   reviewers to it (Settings → Environments). The autonomous fix stage runs in
+   this Environment, so required reviewers enforce a human approval gate before
+   the agent edits the repo. Also enable branch protection on the default branch
+   so AI-authored PRs cannot merge without human review.
+
+8. Commit everything on a feature branch and open a PR.
 ```
 
 ---
@@ -84,11 +91,12 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 ### Manual Install
 
 1. Copy the `.github/review-prompts/` and `.github/workflows/` directories into your repo
-2. Make scripts executable: `chmod +x .github/workflows/scripts/*.sh`
+2. Make scripts executable: `chmod +x .github/workflows/scripts/*.sh .github/workflows/scripts/lib/*.sh`
 3. Add `CLAUDE_CODE_OAUTH_TOKEN` to your repo's Actions secrets
 4. Create the `auto-review` label: `gh label create auto-review --description "Automated codebase review" --color "0E8A16"`
-5. Customize (see Configuration below)
-6. Push to your default branch
+5. Create a `codebase-review-fix` GitHub Environment with required reviewers (human approval gate for the autonomous fix stage) and enable branch protection on your default branch
+6. Customize (see Configuration below)
+7. Push to your default branch
 
 ## Configuration
 
@@ -242,11 +250,15 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 └── workflows/
     ├── codebase-review.yml      # Weekly deep-dive reviews
     ├── claude-pr-review.yml     # PR-level reviews
+    ├── scripts-test.yml         # Lint + unit-test the scripts
     └── scripts/
         ├── resolve-review-area.sh
         ├── extract-review-priority.sh
         ├── extract-pr-review-priority.sh
-        └── trigger-ci-workflows.sh
+        ├── trigger-ci-workflows.sh
+        └── lib/
+            ├── priority-lib.sh         # Shared priority enum + validation
+            └── priority-lib.test.sh    # Unit tests for priority-lib.sh
 ```
 
 ## Cost Considerations
@@ -255,7 +267,45 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
-- Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
+- Use a cheaper pinned model (e.g. `--model claude-sonnet-4-6`) instead of `--model claude-opus-4-8` in the workflow files for cheaper reviews (with some quality tradeoff). Pin a dated model ID rather than a floating alias so each automated finding/fix is traceable to an exact model version.
+
+## AI System Disclosure
+
+This repository is itself an **autonomous AI system**: it uses a general-purpose
+AI model to review code and to edit code, commit, and open pull requests with
+repository write access. The following disclosure supports transparency
+expectations under the EU AI Act and the NIST AI Risk Management Framework.
+
+- **Model used:** Anthropic Claude (Opus), pinned to the dated ID
+  `claude-opus-4-8` in the workflow files so every automated finding and code
+  change is traceable to an exact model version. The model ID is recorded in
+  generated issues and PR bodies.
+- **Purpose:** Automated code review and remediation (a developer productivity
+  tool). It processes only repository contents and PR/issue text — **no
+  end-user data and no personal data**, and it makes **no consequential
+  automated decisions about natural persons**. Under the EU AI Act this is a
+  **minimal/limited-risk** use; no high-risk or prohibited use is present.
+- **Known limitations:** The AI may **hallucinate findings**, miss real issues,
+  or produce **incorrect or insecure "fixes."** All output is **advisory** and
+  must be independently verified.
+- **Human oversight (required):** Every AI-authored change is delivered as a
+  **pull request and is never auto-merged** — a human must review and merge it.
+  The autonomous fix stage additionally runs in a protected GitHub Environment
+  named `codebase-review-fix`. **You must configure required reviewers on that
+  Environment** (Settings → Environments → `codebase-review-fix`) to enforce a
+  human approval checkpoint *before* the agent edits the repository, and you
+  should enable **branch protection** on your default branch so AI-authored PRs
+  cannot be merged without human approval.
+- **AI-authorship transparency:** Generated issues and PR review comments open
+  with a one-line disclosure that the content is AI-generated, AI-authored
+  commits carry a `Co-Authored-By: Claude` trailer, and fix PR bodies end with
+  `Automated fix by codebase-review workflow`.
+- **Abuse / cost controls:** Manual `/claude-review` and `/claude-fix` comment
+  triggers are restricted to repository `OWNER`/`MEMBER`/`COLLABORATOR` actors,
+  limiting both prompt-injection exposure from untrusted input and the cost of
+  unbounded autonomous runs.
+- **Auditability:** Every AI decision is persisted as a GitHub issue or PR with
+  its rationale, severity, and model ID, providing a record-keeping trail.
 
 ## License
 
