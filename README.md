@@ -257,6 +257,24 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 - Adjust the schedule (biweekly instead of weekly)
 - Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
 
+## Data & Privacy
+
+This system sends your repository contents to a third-party processor, so adopters with data-protection obligations (GDPR, CCPA/CPRA, etc.) should review the following before installing.
+
+### What data leaves GitHub
+
+- **Repository contents.** When a workflow runs, it checks out your repository and `anthropics/claude-code-action@v1` processes the checked-out tree through Anthropic's API. Any personal data that happens to live in the source tree — real names or emails in test fixtures, sample data, comments, or config — is transmitted to Anthropic as a sub-processor.
+- **Commit metadata.** The codebase-review **fix** stage checks out with `fetch-depth: 0` (full history) so it can create branches, so commit author/committer names and email addresses (personal data under GDPR) are available to the agent and may be read or quoted. The **review** stage uses `fetch-depth: 1` and only sees the current tree. No `fetch-depth` change is needed — the fix stage genuinely needs history — but the flow is disclosed here.
+- **Generated issues and PRs.** Findings can quote file contents and line excerpts. On public repositories, the resulting issues and PR comments are world-readable and persist in issue history and notification emails even if the underlying source line is later removed — a more visible, longer-lived, and harder-to-purge location than the source file.
+
+### Recommendations for adopters
+
+- **Keep personal data out of tracked files.** This is the simplest mitigation for all three flows above. Avoid real names, emails, or other PII in fixtures, samples, comments, and config.
+- **Put a data processing agreement in place** with Anthropic if your repositories may contain personal data, to support your own Art. 28 processor due diligence and Art. 13/14 transparency duties. See Anthropic's [data-handling and DPA documentation](https://www.anthropic.com/legal/commercial-terms) and the [Claude Code OAuth token](https://docs.anthropic.com/en/docs/claude-code/github-actions) prerequisite above.
+- **Be cautious on public repositories,** where generated issues and PR comments are publicly visible.
+
+This disclosure concerns the data flow created when you *adopt* this template; the template's own tracked files contain no third-party personal data.
+
 ## License
 
 MIT
