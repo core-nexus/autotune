@@ -249,6 +249,34 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Data & Privacy
+
+This system sends your repository's contents to a third-party AI provider
+(Anthropic) for processing. Before enabling it, understand what leaves your
+boundary:
+
+- **What is transmitted:** Scheduled codebase reviews send your repository's
+  **entire codebase** to Anthropic's Claude API (via
+  [`claude-code-action`](https://github.com/anthropics/claude-code-action)).
+  PR reviews additionally send the full diff, PR/issue bodies, and comment
+  text. This includes **author identifiers** (e.g. GitHub usernames such as
+  `github.actor`) and any comment content, which are low-sensitivity personal
+  data.
+- **Why it matters:** Source code can contain PII, secrets, or customer data
+  in fixtures, migrations, seed files, or test data. When this tool runs, that
+  data is processed by Anthropic as a third-party sub-processor.
+- **For regulated data:** Teams subject to GDPR, CCPA, or internal
+  data-handling policies should confirm a **data-processing agreement (DPA)**
+  with Anthropic and review
+  [Anthropic's data-usage and retention terms](https://www.anthropic.com/legal/commercial-terms)
+  before enabling this tool. Consider **not** enabling it on repositories that
+  contain regulated personal data, or excluding PII/secret-bearing paths from
+  the repository.
+- **Retained findings:** Review-created GitHub issues and PRs may quote source
+  lines as part of their findings. The workflow only closes/supersedes prior
+  issues — it never deletes them — so any quoted content persists in your issue
+  tracker until manually deleted.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
