@@ -1,4 +1,4 @@
-# Claude Code Review
+# autotune
 
 Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 12 focus areas, finds issues, and auto-fixes them via pull requests.
 
@@ -30,7 +30,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All reviews are scheduled together every **Sunday at 06:00 UTC**. They run 3 at a time (`max-parallel: 3` on the review matrix) and the rest queue, so the full sweep is staggered rather than instantaneous. You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -46,9 +46,9 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 ---
 
 ```
-Install the claude-code-review system from https://github.com/core-nexus/claude-code-review into this repository. Here's what to do:
+Install the autotune codebase-review system from https://github.com/core-nexus/autotune into this repository. Here's what to do:
 
-1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
+1. Clone or fetch the review system files from https://github.com/core-nexus/autotune
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
    - .github/review-prompts/  (all 12 .md files)
@@ -186,23 +186,30 @@ Sunday 06:00 UTC (or manual trigger)
 
 ### PR Review Pipeline
 
+Triggers: a PR being opened or marked ready for review, a `/claude-review`
+comment (run the review stage), or a `/claude-fix` comment (skip straight to the
+fix stage on demand).
+
 ```
 PR opened / ready for review / /claude-review comment
         │
         ▼
 ┌─────────────────────────────────────┐
-│  STAGE 1: REVIEW                    │
+│  STAGE 1: REVIEW (30 min timeout)   │
 │  Post review comment with findings  │
 │  Set MAXIMUM_FIX_PRIORITY           │
 └─────────────────────────────────────┘
         │
-        ▼ (if LOW, MEDIUM, or HIGH)
+        ▼ (if LOW, MEDIUM, or HIGH — or on a /claude-fix comment)
 ┌─────────────────────────────────────┐
-│  STAGE 2: FIX                       │
+│  STAGE 2: FIX (120 min timeout)     │
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
 ```
+
+A `/claude-fix` comment invokes Stage 2 directly without re-running the review —
+useful when you already know what needs fixing.
 
 ### Priority Levels
 
