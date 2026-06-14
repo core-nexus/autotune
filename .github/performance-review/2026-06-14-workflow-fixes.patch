@@ -1,0 +1,41 @@
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..917a1bd 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -11,8 +11,15 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR_NUMBER:?}"
+ 
+-PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+-  --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
++# Fetch the newest comments first (server-side sort) and take the most recent
++# one carrying the marker. Sorting descending with per_page=100 bounds the
++# request to a single page while reliably surfacing the latest marker, even on
++# busy PRs that accumulate well over the default 30 comments. (Fetching the
++# default ascending first page and taking `last` would miss markers that fall
++# outside that first page.)
++PRIORITY=$(gh api \
++  "repos/${REPO}/issues/${PR_NUMBER}/comments?sort=created&direction=desc&per_page=100" \
++  --jq 'map(select(.body | test("MAXIMUM_FIX_PRIORITY:"))) | .[0].body' 2>/dev/null \
+   | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..69d168a 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -28,9 +28,13 @@ fi
+ # Method 2 (fallback): list recent issues via REST API
+ if [[ -z "${PRIORITY}" ]]; then
+   echo "Falling back to gh issue list..."
++  # `gh issue list` returns newest-first, so `.[0]` of the area-filtered set is
++  # the latest issue for this area. The limit must comfortably exceed one full
++  # review batch (12 areas run together each week) — otherwise this area's most
++  # recent issue can be truncated out of the window, silently yielding NONE.
+   BODY=$(gh issue list \
+     --repo "${REPO}" \
+-    --state all --limit 10 \
++    --state all --limit 100 \
+     --json title,body \
+     --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
+     2>/dev/null || true)
