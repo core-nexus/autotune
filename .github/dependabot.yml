@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keep third-party GitHub Actions current. With the actions pinned to commit
+  # SHAs (see the workflow files), Dependabot bumps both the SHA and its
+  # trailing version comment together, so SHA pinning stays maintainable.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "auto-review"
+    commit-message:
+      prefix: "ci"
