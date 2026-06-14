@@ -213,6 +213,7 @@ PR opened / ready for review / /claude-review comment
 | LOW | Minor issues | PR review: yes. Codebase review: no |
 | MEDIUM | Real issues | Yes |
 | HIGH | Critical issues | Yes |
+| UNKNOWN | Priority could not be extracted (degraded run) | No — fix is skipped and the `notify` job alerts a human to investigate |
 
 ## Adding Custom Review Areas
 
@@ -249,13 +250,75 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         └── trigger-ci-workflows.sh
 ```
 
+## Responsible Use & AI Transparency
+
+This system *is* an AI system: it uses Claude (Anthropic) to autonomously review
+code, classify findings, decide a fix priority, and open pull requests with
+machine-generated code changes. A few things to understand before enabling it.
+
+### Data Handling
+
+**Running this system sends your repository contents to a third-party AI
+provider (Anthropic) for processing on every review and fix run.** Source code
+from the checked-out repository is transmitted to Anthropic's API to generate
+reviews and fixes.
+
+- Review Anthropic's data-usage and retention terms before enabling: the
+  [Commercial Terms](https://www.anthropic.com/legal/commercial-terms) and
+  [Privacy Policy](https://www.anthropic.com/legal/privacy).
+- **Do not enable this system on repositories whose code may not legally or
+  contractually leave your organization** (proprietary, regulated, or
+  customer-confidential code).
+
+### Human Review Is Required — Never Auto-Merge
+
+The fix stage runs automatically when a review self-reports a MEDIUM/HIGH
+priority, and writes code with `contents: write`. The AI's own finding (which
+may be a false positive or a hallucination) is the only input to the AI's fix.
+**The only safeguard is manual PR review, so:**
+
+- Treat every `auto-review` PR as untrusted machine output that requires a human
+  reviewer before merge.
+- **Never enable auto-merge on `auto-review` PRs.** Doing so removes the only
+  human-in-the-loop checkpoint between automated detection and automated change.
+- To add an explicit approval gate, run the fix stage behind a
+  [GitHub Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+  with required reviewers, or gate it behind a label a human applies.
+
+### AI-Generated Content Is Disclosed
+
+Review issues, PR-review comments, and fix PRs each carry an explicit
+AI-generated disclosure line at the top of their body, in addition to the
+`auto-review` label and bot identity. This supports transparency obligations
+such as EU AI Act Art. 50 (effective 2 Aug 2026).
+
+### Model Version & Audit Trail
+
+- The workflows pin a specific model ID (`claude-opus-4-8`) rather than a
+  floating alias so an automated decision can be reproduced and correlated with
+  a known model version. Bump it deliberately when you want a newer model.
+- Each review run uploads its execution file and a metadata record (area, model,
+  priority, run URL) as a `review-audit-*` artifact with 90-day retention, so the
+  model's reasoning behind a finding or change can be investigated after the fact.
+
+### Reporting an Incorrect Review or Fix
+
+If an automated review or fix is wrong (a hallucinated finding, an incorrect or
+harmful code change):
+
+1. Close the offending PR/issue and reference this section in a comment.
+2. Open an issue describing what was wrong, linking the `review-audit-*` artifact
+   from the corresponding workflow run.
+3. If the failure was systemic, refine the relevant `.github/review-prompts/*.md`
+   checklist or tighten the priority gate in the workflow.
+
 ## Cost Considerations
 
 Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
-- Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
+- Use a cheaper pinned model (e.g. `--model claude-sonnet-4-6` instead of `--model claude-opus-4-8`) in the workflow files for cheaper reviews (with some quality tradeoff)
 
 ## License
 
