@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Keep third-party GitHub Actions up to date. Actions are pinned to full
+  # commit SHAs (with a version comment) for supply-chain integrity; Dependabot
+  # bumps those SHAs as new releases ship so pinning doesn't go stale.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
