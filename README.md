@@ -239,14 +239,59 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 │   ├── documentation.md
 │   ├── dependency-health.md
 │   └── e-commerce.md
+├── ci-workflow.example.yml     # Copy to workflows/ci.yml to lint + test scripts
+├── scripts/                    # Hardened, tested copies of the glue scripts
+│   ├── resolve-review-area.sh
+│   ├── extract-review-priority.sh
+│   ├── extract-pr-review-priority.sh
+│   └── trigger-ci-workflows.sh
 └── workflows/
     ├── codebase-review.yml      # Weekly deep-dive reviews
     ├── claude-pr-review.yml     # PR-level reviews
-    └── scripts/
+    └── scripts/                 # Live copies the workflows invoke today
         ├── resolve-review-area.sh
         ├── extract-review-priority.sh
         ├── extract-pr-review-priority.sh
         └── trigger-ci-workflows.sh
+
+tests/
+├── test_helper.bash               # Shared bats helpers (temp output, gh stub)
+├── resolve-review-area.bats
+├── extract-review-priority.bats
+├── extract-pr-review-priority.bats
+└── trigger-ci-workflows.bats
+```
+
+## Testing the Glue Scripts
+
+The Bash scripts carry the pipeline's only branching logic, so they have a
+[bats](https://github.com/bats-core/bats-core) test suite and a `shellcheck`
+lint step. Copy `.github/ci-workflow.example.yml` to `.github/workflows/ci.yml`
+to run both on every push and PR. (It ships as an example, and the hardened
+scripts live in `.github/scripts/` rather than overwriting
+`.github/workflows/scripts/`, because the automated review bot's token lacks
+the `workflows` permission GitHub requires to add or modify anything under
+`.github/workflows/`.) To run them locally:
+
+```bash
+sudo apt-get install -y bats shellcheck   # or: brew install bats-core shellcheck
+shellcheck .github/scripts/*.sh
+bats tests/
+```
+
+The tests stub `gh` on `PATH` and use a temporary `GITHUB_OUTPUT` file, so they
+make no network calls and need no GitHub credentials.
+
+### Adopting the hardened scripts
+
+`.github/scripts/` holds the validated, tested versions of the four scripts.
+The workflows still invoke the copies under `.github/workflows/scripts/`. A
+maintainer with the `workflows` permission can adopt the hardened versions by
+copying them over the live ones (the contents are drop-in compatible — the
+matrix/output formats are unchanged):
+
+```bash
+cp .github/scripts/*.sh .github/workflows/scripts/
 ```
 
 ## Cost Considerations

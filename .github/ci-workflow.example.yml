@@ -1,0 +1,44 @@
+# CI workflow template — copy this file to .github/workflows/ci.yml to enable it.
+#
+# It ships here as an example rather than directly under .github/workflows/
+# because the automated review bot's token lacks the `workflows` permission
+# needed to add workflow files. A maintainer (or any human/token with that
+# permission) just needs to:
+#
+#   cp .github/ci-workflow.example.yml .github/workflows/ci.yml
+#
+# and commit it. The lint/test commands below also run standalone (see README).
+
+name: CI
+
+# Lint and test the Bash glue scripts that drive the review pipeline. These
+# scripts gate the automated fix stage and build the review matrix, so a silent
+# regression here would quietly make the pipeline do the wrong thing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on scripts
+        run: shellcheck .github/scripts/*.sh .github/workflows/scripts/*.sh
+
+  bats:
+    name: Bats tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run bats suite
+        run: bats tests/
