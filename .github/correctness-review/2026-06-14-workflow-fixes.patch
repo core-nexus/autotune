@@ -1,0 +1,96 @@
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..81303db 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -68,8 +68,11 @@ jobs:
+       max-parallel: 3
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+-    outputs:
+-      priority: ${{ steps.extract-priority.outputs.priority }}
++    # NOTE: This job is a matrix. GitHub Actions collapses matrix-job outputs to a
++    # single nondeterministic value (last cell to finish wins), so a job-level
++    # `priority` output cannot carry a per-area value. The fix stage therefore
++    # re-derives each area's priority from its own review issue instead of reading
++    # an output here. The step below remains only for per-cell log visibility.
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+@@ -175,10 +178,12 @@ jobs:
+   # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+   fix:
+     needs: [determine-area, review]
+-    if: |
+-      always() &&
+-      needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
++    # Run a fix cell for every area, then self-gate per area inside the job (see the
++    # "Determine fix priority" step). The old job-level gate read
++    # needs.review.outputs.priority — a single matrix-collapsed value — which let one
++    # arbitrary area decide whether fixes ran for ALL areas. Each area must gate on
++    # its own review priority, which is only knowable per-cell at runtime.
++    if: always() && needs.determine-area.result == 'success'
+     runs-on: ubuntu-latest
+     timeout-minutes: 90
+     permissions:
+@@ -198,7 +203,19 @@ jobs:
+         with:
+           fetch-depth: 0
+ 
++      # Re-derive THIS area's priority from its own review issue (the matrix-collapsed
++      # review job output cannot be trusted — see the note on the review job). Every
++      # subsequent step gates on this per-area value so clean areas are left untouched.
++      - name: Determine fix priority for ${{ matrix.area }}
++        id: gate
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REVIEW_AREA: ${{ matrix.area }}
++          REPO: ${{ github.repository }}
++        run: .github/workflows/scripts/extract-review-priority.sh
++
+       - name: Fix review findings — ${{ matrix.area }}
++        if: steps.gate.outputs.priority == 'HIGH' || steps.gate.outputs.priority == 'MEDIUM'
+         uses: anthropics/claude-code-action@v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+@@ -211,7 +228,7 @@ jobs:
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ steps.gate.outputs.priority }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+@@ -285,12 +302,13 @@ jobs:
+ 
+       # Trigger CI on the new PR branch (customize workflow names for your project)
+       - name: Trigger CI workflows
+-        if: success()
++        if: success() && (steps.gate.outputs.priority == 'HIGH' || steps.gate.outputs.priority == 'MEDIUM')
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+         run: |
+-          export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          export BRANCH
+           .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..a6d4b9d 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -34,8 +34,10 @@ if [[ -z "${PRIORITY}" ]]; then
+     --json title,body \
+     --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
+     2>/dev/null || true)
++  # tail -1 mirrors Method 1: collapse any duplicate markers to a single line so the
++  # later `priority=...` write to $GITHUB_OUTPUT is never a malformed multi-line value.
+   PRIORITY=$(echo "${BODY}" \
+-    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
++    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' | tail -1 || true)
+   echo "Extracted from issue list: ${PRIORITY:-<empty>}"
+ fi
+ 
