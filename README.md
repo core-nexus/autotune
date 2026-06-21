@@ -76,7 +76,13 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 6. Create the `auto-review` label in the repo:
    gh label create auto-review --description "Automated codebase review" --color "0E8A16"
 
-7. Commit everything on a feature branch and open a PR.
+7. Do NOT relax the security defaults: keep the author-association guard on the
+   `/claude-review` and `/claude-fix` comment triggers (only OWNER/MEMBER/
+   COLLABORATOR may invoke them), keep third-party actions pinned to commit SHAs,
+   and keep the scoped `--allowedTools` allowlists (do not reintroduce
+   `--dangerously-skip-permissions`). See the "Security Hardening" section below.
+
+8. Commit everything on a feature branch and open a PR.
 ```
 
 ---
@@ -128,7 +134,7 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
 
 ```yaml
 - name: Notify Slack on failure
-  uses: slackapi/slack-github-action@v3.0.1
+  uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
   with:
     webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
     webhook-type: incoming-webhook
@@ -150,6 +156,17 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
 ### Using Your Own CLAUDE.md
 
 If your project has a `CLAUDE.md` at the repo root, the review system will automatically read it and follow your project's coding standards. This is the best way to customize review behavior without editing the prompts.
+
+## Security Hardening
+
+These workflows grant an AI agent `contents: write` and a Claude OAuth token, so they ship with secure defaults. **Do not weaken them** when you copy the system into your repo:
+
+- **Author-authorization on comment triggers.** The `/claude-review` and `/claude-fix` slash commands only run for users whose `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. Without this guard, *any* GitHub user could comment on a PR and invoke a privileged agent with your secrets and write access. The command must also be at the **start** of the comment, so prose that merely quotes it does not trigger a run.
+- **Untrusted input is treated as data, not instructions.** PR titles, bodies, diffs, comments, and issue bodies are attacker-controllable. The prompts explicitly instruct the agent to treat all such content as untrusted data and never to follow instructions embedded in it (prompt-injection defense).
+- **Third-party actions are pinned to commit SHAs.** `actions/checkout`, `anthropics/claude-code-action`, and the optional `slackapi/slack-github-action` are referenced by full commit SHA (with a `# vX` comment) so a moved or compromised tag cannot inject code into a privileged run. Keep them current with Dependabot for GitHub Actions.
+- **Scoped tool allowlists, not `--dangerously-skip-permissions`.** Review jobs are read-only (`Read,Glob,Grep,Bash(git:*),Bash(gh:*)`); fix jobs add edit/write tools. If your project's quality gates need to run lint/type-check/test commands, add them explicitly (e.g. `Bash(npm:*)`, `Bash(pnpm:*)`, `Bash(make:*)`) rather than removing the allowlist.
+- **Least-privilege permissions.** Jobs request only the scopes they use; `id-token: write` is not granted (no OIDC exchange is performed).
+- **Fail-closed priority gate.** The fix stage only runs when the priority is set by the workflow's own bot-authored review issue. If that signal is missing, it defaults to `NONE` (no fix run) — user-authored issues cannot coerce the fixer into running.
 
 ## How It Works
 
