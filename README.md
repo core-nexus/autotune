@@ -257,6 +257,30 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 - Adjust the schedule (biweekly instead of weekly)
 - Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
 
+## Data & Privacy
+
+This system processes your repository contents through Anthropic's API. Be aware
+of the following before adopting it:
+
+- **Repository contents leave the GitHub Actions environment.** In every job,
+  `actions/checkout` is immediately followed by `anthropics/claude-code-action`,
+  which gives Claude access to the full checked-out tree and sends it to
+  Anthropic's API for processing. This applies to both the codebase-review and
+  PR-review workflows, in both their review and fix stages.
+- **Personal data in your tree is transmitted to a third-party sub-processor.**
+  Any personal data that happens to live in your source tree — real names or
+  emails in test fixtures, sample data, comments, or config — is included.
+  Keep PII out of the repository where possible.
+- **Ensure a data processing agreement (DPA) is in place** if your repositories
+  may contain personal data and you have GDPR (Art. 28), CCPA, or similar
+  obligations. Adopters remain responsible for their own Art. 13/14 transparency
+  duties and service-provider disclosures.
+- See Anthropic's
+  [data handling and privacy documentation](https://docs.anthropic.com/en/docs/legal-center/privacy)
+  for how data is processed, and the
+  [commercial terms / DPA](https://www.anthropic.com/legal/commercial-terms)
+  for processor commitments.
+
 ## License
 
 MIT
