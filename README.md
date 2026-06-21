@@ -9,7 +9,7 @@ A two-stage GitHub Actions pipeline:
 1. **Review Stage** — Claude reads your entire codebase against a specific review checklist, creates a GitHub issue with findings organized by severity
 2. **Fix Stage** — If MEDIUM+ severity issues are found, Claude automatically edits code, runs your quality gates, and opens a PR with fixes
 
-It also includes a **PR review workflow** that automatically reviews every pull request and can auto-fix issues it finds.
+It also includes a **PR review workflow** that reviews each pull request when it's opened or marked ready for review (Dependabot PRs are skipped) and can auto-fix issues it finds.
 
 ### Review Areas
 
@@ -30,7 +30,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All areas are scheduled together every **Sunday at 06:00 UTC**, with up to 3 reviews running concurrently (the rest queue); any fixes run serially, one area at a time. You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -46,9 +46,9 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 ---
 
 ```
-Install the claude-code-review system from https://github.com/core-nexus/claude-code-review into this repository. Here's what to do:
+Install the claude-code-review system from https://github.com/core-nexus/autotune into this repository. Here's what to do:
 
-1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
+1. Clone or fetch the review system files from https://github.com/core-nexus/autotune
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
    - .github/review-prompts/  (all 12 .md files)
@@ -196,13 +196,18 @@ PR opened / ready for review / /claude-review comment
 │  Set MAXIMUM_FIX_PRIORITY           │
 └─────────────────────────────────────┘
         │
-        ▼ (if LOW, MEDIUM, or HIGH)
+        ▼ (if LOW, MEDIUM, or HIGH — or /claude-fix comment)
 ┌─────────────────────────────────────┐
-│  STAGE 2: FIX                       │
+│  STAGE 2: FIX (120 min timeout)     │
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
 ```
+
+**Triggers:**
+- **PR opened / marked ready for review** — runs the review automatically (Dependabot PRs are skipped).
+- **`/claude-review` comment** — manually runs the review stage on a PR.
+- **`/claude-fix` comment** — manually runs the fix stage on a PR directly, without waiting for a review.
 
 ### Priority Levels
 
@@ -256,6 +261,8 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
 - Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
+
+The PR review pipeline runs on demand (per PR, not on a schedule): a 30-minute review followed by an up-to-120-minute fix session when issues are found.
 
 ## License
 
