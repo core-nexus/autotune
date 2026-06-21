@@ -1,0 +1,329 @@
+diff --git a/.github/workflows/claude-pr-review.yml b/.github/workflows/claude-pr-review.yml
+index ed8bdcc..9407205 100644
+--- a/.github/workflows/claude-pr-review.yml
++++ b/.github/workflows/claude-pr-review.yml
+@@ -15,13 +15,22 @@ concurrency:
+   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+ 
++# Pin the model to an explicit, version-controlled id rather than a floating
++# alias ("opus") so AI output is reproducible and auditable, and the exact model
++# can be stamped into review comments. Keep in sync with codebase-review.yml.
++env:
++  CLAUDE_MODEL: claude-opus-4-8
++
+ jobs:
+   # ─── Stage 1: Review ───────────────────────────────────────────────────────
+   review:
+-    # Run on PR events (not dependabot), or on "/claude-review" comments on PRs
++    # Run on PR events (not dependabot), or on "/claude-review" comments on PRs.
++    # Comment triggers are gated on author_association so only OWNER/MEMBER/
++    # COLLABORATOR (i.e. users with write access) can launch an expensive,
++    # write-capable AI run — preventing abuse by arbitrary commenters.
+     if: |
+       (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
+-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review'))
++      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review') && contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+     runs-on: ubuntu-latest
+     timeout-minutes: 30
+     permissions:
+@@ -45,7 +54,7 @@ jobs:
+           track_progress: true
+           claude_args: >-
+             --dangerously-skip-permissions
+-            --model opus
++            --model ${{ env.CLAUDE_MODEL }}
+             --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before reviewing. It contains the project's coding standards and conventions. Treat it as authoritative."
+ 
+           prompt: |
+@@ -101,6 +110,10 @@ jobs:
+             ---
+ 
+             Format: Provide all feedback in a single comment with numbered items.
++            Begin the comment with a short italic AI-transparency note recording
++            the model, for audit/reproducibility and so readers know the review is
++            machine-generated, e.g.: `_AI-generated review by
++            \`${{ env.CLAUDE_MODEL }}\`. Requires human review before acting._`
+             Do NOT prefix numbers with `#` (GitHub treats that as issue links).
+             For each item, reference the file and line. Prioritize by severity.
+ 
+@@ -136,10 +149,14 @@ jobs:
+   fix-review-issues:
+     needs: review
+     # Run after review if priority is LOW/MEDIUM/HIGH, or directly on "/claude-fix"
++    # The "/claude-fix" comment trigger is gated on author_association so only
++    # OWNER/MEMBER/COLLABORATOR can launch the write-capable, permission-skipping
++    # fix agent — an unprivileged trigger of a `contents: write` AI run is an
++    # abuse/safety gap.
+     if: |
+       always() && (
+         (needs.review.result == 'success' && (needs.review.outputs.follow_up == 'HIGH' || needs.review.outputs.follow_up == 'MEDIUM' || needs.review.outputs.follow_up == 'LOW')) ||
+-        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix'))
++        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix') && contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+       )
+     runs-on: ubuntu-latest
+     timeout-minutes: 120
+@@ -162,7 +179,7 @@ jobs:
+           track_progress: true
+           claude_args: >-
+             --dangerously-skip-permissions
+-            --model opus
++            --model ${{ env.CLAUDE_MODEL }}
+             --max-turns 250
+             --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative."
+ 
+@@ -223,6 +240,15 @@ jobs:
+             ## Step 5: Commit and push
+ 
+             - Each commit explains what was fixed and why.
++            - **AI-authorship attribution (required).** These commits are authored
++              entirely by an AI agent. End EACH commit message with both a
++              generated-with marker and a co-author trailer so AI commits are
++              distinguishable from human ones in git history (provenance/audit):
++
++                  🤖 Generated with Claude Code (${{ env.CLAUDE_MODEL }})
++
++                  Co-Authored-By: Claude <noreply@anthropic.com>
++
+             - Push your commits to the PR branch.
+ 
+             ## Step 6: WAIT FOR CI AND FIX UNTIL GREEN (CRITICAL)
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..dec06dc 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -36,6 +36,15 @@ concurrency:
+   group: codebase-review-${{ inputs.review_area || github.run_id }}
+   cancel-in-progress: false
+ 
++# Pin the model to an explicit, version-controlled id rather than a floating
++# alias (e.g. "opus"). A floating alias can be silently repointed, making
++# results non-reproducible and non-auditable — the ai-compliance checklist
++# requires "Model versions and configurations are tracked". This single source
++# of truth is recorded in git history and stamped into every issue/PR body the
++# workflow produces. Adopters: update this when intentionally moving models.
++env:
++  CLAUDE_MODEL: claude-opus-4-8
++
+ jobs:
+   # ─── Determine which review area(s) to run ─────────────────────────────────
+   determine-area:
+@@ -83,7 +92,7 @@ jobs:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: >-
+             --dangerously-skip-permissions
+-            --model opus
++            --model ${{ env.CLAUDE_MODEL }}
+             --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before reviewing. It contains the project's coding standards and conventions. Treat it as authoritative."
+ 
+           prompt: |
+@@ -126,13 +135,26 @@ jobs:
+             - **Why it matters** (impact if not fixed)
+             - **Suggested fix** (concrete, actionable)
+ 
++            **AI transparency & record-keeping (required).** Begin the issue body
++            with a short italic note marking it as AI-generated and recording the
++            model version and run, for audit and reproducibility, e.g.:
++            `_AI-generated review by \`${{ env.CLAUDE_MODEL }}\` via the automated
++            codebase-review workflow ([run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})).
++            Findings require human review before action._`
++
+             Label the issue with: `auto-review`
+ 
+             **After creating the issue**, search for any other OPEN issues
+             with the `auto-review` label whose title starts with
+             `review(${{ matrix.area }}):` (excluding the one you just created).
+-            If you find any, close them with a comment linking to the new issue:
+-            `Superseded by #<new-issue-number>.`
++            **Human-oversight safeguard:** before closing any issue, confirm it
++            BOTH carries the `auto-review` label AND was authored by this
++            workflow's bot account (a bot/app actor such as `github-actions[bot]`
++            or the app that runs this workflow). NEVER close an issue authored by
++            a human, even if its title shares the `review(${{ matrix.area }}):`
++            prefix — leave a comment proposing closure instead. For the
++            workflow-authored ones, close them with a comment linking to the new
++            issue: `Superseded by #<new-issue-number>.`
+ 
+             If the review is clean with no findings, title the issue:
+             `review(${{ matrix.area }}): clean — YYYY-MM-DD`
+@@ -172,6 +194,27 @@ jobs:
+           REPO: ${{ github.repository }}
+         run: .github/workflows/scripts/extract-review-priority.sh
+ 
++      # Durable, per-run AI audit record (area, model+version, resolved priority,
++      # outcome, run link) so every AI-produced artifact is traceable — meets the
++      # ai-compliance "AI system decisions are logged for audit purposes" /
++      # "model versions and configurations are tracked" criteria. Runs even when
++      # priority extraction fails (if: always) so failures are recorded too.
++      - name: Record AI audit log entry
++        if: always()
++        run: |
++          {
++            echo "### AI audit record — ${{ matrix.area }}"
++            echo ""
++            echo "| Field | Value |"
++            echo "| --- | --- |"
++            echo "| Area | ${{ matrix.area }} |"
++            echo "| Model (pinned) | \`${{ env.CLAUDE_MODEL }}\` |"
++            echo "| Resolved priority | ${{ steps.extract-priority.outputs.priority || 'UNKNOWN' }} |"
++            echo "| Review step outcome | ${{ steps.review.outcome }} |"
++            echo "| Triggered by | ${{ github.event_name }} (${{ github.actor }}) |"
++            echo "| Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
++          } >> "${GITHUB_STEP_SUMMARY}"
++
+   # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+   fix:
+     needs: [determine-area, review]
+@@ -204,7 +247,7 @@ jobs:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: >-
+             --dangerously-skip-permissions
+-            --model opus
++            --model ${{ env.CLAUDE_MODEL }}
+             --max-turns 250
+             --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative."
+ 
+@@ -262,18 +305,38 @@ jobs:
+             1. Create branch: `review/${{ matrix.area }}-YYYY-MM-DD`
+                (replace YYYY-MM-DD with today's date)
+             2. Each commit message should explain what was fixed and why.
++               **AI-authorship attribution (required).** Every commit is authored
++               entirely by an AI agent, so end EACH commit message with both a
++               trailer line and a generated-with marker so AI commits are
++               distinguishable from human ones in git history (provenance/audit):
++
++                   🤖 Generated with Claude Code (${{ env.CLAUDE_MODEL }})
++
++                   Co-Authored-By: Claude <noreply@anthropic.com>
++
+             3. Push: `git push -u origin HEAD`
+             4. Open a PR:
+                - Title: `review(${{ matrix.area }}): weekly codebase review fixes`
+                - Labels: `auto-review`
+                - Body: summary of what was fixed, organized by severity,
+-                 referencing the review issue. End with:
++                 referencing the review issue. Begin the body with a short
++                 italic AI-transparency note recording the model version and
++                 stating that the changes are AI-generated and require human
++                 review before merge, e.g.: `_AI-generated fixes by
++                 \`${{ env.CLAUDE_MODEL }}\` via the automated codebase-review
++                 workflow. Requires human review before merge._` End with:
+                  `Automated fix by codebase-review workflow`
+             5. **After opening the PR**, search for any other OPEN pull requests
+                with the `auto-review` label whose title starts with
+                `review(${{ matrix.area }}):` (excluding the one you just created).
+-               If you find any, close them with a comment linking to the new PR:
+-               `Superseded by #<new-pr-number>.`
++               **Human-oversight safeguard:** before closing any PR, confirm it
++               BOTH carries the `auto-review` label AND was authored by this
++               workflow's bot account (a bot/app actor such as
++               `github-actions[bot]` or the app that runs this workflow). NEVER
++               close a PR authored by a human, even if its title shares the
++               `review(${{ matrix.area }}):` prefix — leave a comment proposing
++               closure instead. For the workflow-authored ones, close them with a
++               comment linking to the new PR: `Superseded by #<new-pr-number>.`
+ 
+             ## Formatting rule
+ 
+@@ -293,17 +356,35 @@ jobs:
+           export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
+           .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+-  # ─── Notify on failure (configure your notification channel) ────────────────
++  # ─── AI incident-reporting path (configure your notification channel) ───────
++  # Fires whenever a review or fix job fails — including the LOUD failure raised
++  # by extract-review-priority.sh when the AI output is unparseable (UNKNOWN
++  # priority). This is the ai-compliance "AI-related incidents have a reporting
++  # mechanism" path: a failure here means an AI run misbehaved or was suppressed,
++  # not just flaky infra, so it must be surfaced, not swallowed.
+   notify:
+     needs: [review, fix]
+     if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
+     runs-on: ubuntu-latest
+     steps:
+-      - name: Notify on failure
++      - name: Report AI workflow incident
+         run: |
+-          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
++          echo "::error title=AI codebase-review incident::Codebase review workflow failed (possible suppressed/unparseable AI output). Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
++          {
++            echo "### ⚠️ AI codebase-review incident"
++            echo ""
++            echo "An AI review or fix job failed. If priority extraction reported"
++            echo "UNKNOWN, the AI output was missing or malformed and real findings"
++            echo "may have been suppressed — investigate the run before trusting a"
++            echo "\"clean\" result."
++            echo ""
++            echo "- Review result: ${{ needs.review.result }}"
++            echo "- Fix result: ${{ needs.fix.result }}"
++            echo "- Model: \`${{ env.CLAUDE_MODEL }}\`"
++            echo "- Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
++          } >> "${GITHUB_STEP_SUMMARY}"
+           echo ""
+-          echo "To add Slack notifications, replace this step with:"
++          echo "To route incidents to Slack, replace this step with:"
+           echo "  uses: slackapi/slack-github-action@v3.0.1"
+           echo "  with:"
+           echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..1408334 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -11,9 +11,26 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR_NUMBER:?}"
+ 
++# Note: do NOT use `|| echo "NONE"` as a fallback here. A failed API call or a
++# review comment that never emitted a parseable token would then be silently
++# treated as "clean" (fail open), skipping the fix stage and dropping real
++# findings. Capture the raw result and validate it explicitly below.
+ PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+   --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
+-  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
++  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || true)
+ 
+-echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+-echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
++# Fail safe, not fail open. Only a recognized priority value is trusted; anything
++# else (no comment found, truncated/garbled output, format drift) becomes a
++# distinct UNKNOWN sentinel and fails the job LOUDLY so a broken AI review is
++# surfaced as a red check rather than masquerading as a clean one.
++case "${PRIORITY}" in
++  NONE | XLOW | LOW | MEDIUM | HIGH)
++    echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
++    echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
++    ;;
++  *)
++    echo "priority=UNKNOWN" >> "${GITHUB_OUTPUT}"
++    echo "::error title=Review priority unparseable::Could not extract a valid MAXIMUM_FIX_PRIORITY from the review of PR #${PR_NUMBER} (got '${PRIORITY:-<empty>}'). The AI review output is missing or malformed; failing so the failure is surfaced rather than masked."
++    exit 1
++    ;;
++esac
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..4bf3933 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -39,6 +39,20 @@ if [[ -z "${PRIORITY}" ]]; then
+   echo "Extracted from issue list: ${PRIORITY:-<empty>}"
+ fi
+ 
+-PRIORITY="${PRIORITY:-NONE}"
+-echo "MAXIMUM_FIX_PRIORITY for ${REVIEW_AREA}: ${PRIORITY}"
+-echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
++# Fail safe, not fail open. A parseable priority must be one of the known
++# values. If nothing parsed (truncated/garbled AI output, format drift) or the
++# token is unrecognized, emit a distinct UNKNOWN sentinel and fail the job
++# LOUDLY rather than silently defaulting to NONE — a broken AI run must never be
++# indistinguishable from a genuinely clean review (that would silently drop real
++# findings, the most dangerous failure mode for an automated safety gate).
++case "${PRIORITY}" in
++  NONE | XLOW | LOW | MEDIUM | HIGH)
++    echo "MAXIMUM_FIX_PRIORITY for ${REVIEW_AREA}: ${PRIORITY}"
++    echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
++    ;;
++  *)
++    echo "priority=UNKNOWN" >> "${GITHUB_OUTPUT}"
++    echo "::error title=Review priority unparseable::Could not extract a valid MAXIMUM_FIX_PRIORITY for '${REVIEW_AREA}' (got '${PRIORITY:-<empty>}'). The AI review output is missing or malformed; treating as UNKNOWN and failing so the failure is surfaced rather than masked."
++    exit 1
++    ;;
++esac
