@@ -257,6 +257,41 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 - Adjust the schedule (biweekly instead of weekly)
 - Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
 
+## Data & Privacy
+
+This tool reviews and fixes your code with Claude, which means it transmits
+repository contents to a third-party AI service and produces durable artifacts.
+Understand the data flow before enabling it:
+
+- **Your codebase is sent to Anthropic's API.** Both workflows check out the
+  repository and run `anthropics/claude-code-action` with
+  `--dangerously-skip-permissions`, so the agent can read repository files and
+  send their contents to the Anthropic API during review and fix runs. On a real
+  project this may include anything in the repo — fixtures, seed data, support
+  transcripts, or `.env`-style files. Review
+  [Anthropic's data-handling terms](https://www.anthropic.com/legal/commercial-terms)
+  and [privacy policy](https://www.anthropic.com/legal/privacy), and put a data
+  processing agreement in place if your codebase contains personal data.
+
+- **Minimize what the agent can reach.** Keep secrets and PII-laden data out of
+  the repository in the first place (use `.gitignore`, secret managers, and
+  synthetic test data). If sensitive paths must exist, the review prompts instruct
+  the agent to report likely-secret files (`.env*`, credential stores, data dumps)
+  **by path only** and never to quote their contents — but the safest control is
+  to not have that data checked out where the agent runs.
+
+- **Findings never republish raw PII.** The privacy prompt and both workflows
+  instruct the agent to reference the location and field *type* of any sensitive
+  data and to mask the value (e.g. `user_email = <redacted email>`) rather than
+  paste it into an issue, PR, or commit. This prevents the audit from leaking the
+  very data it is meant to protect.
+
+- **Artifacts are durable — triage them.** Review issues, fix PRs, and
+  `review/<area>-<date>` branches persist indefinitely and may contain code
+  excerpts. On repos handling sensitive data, prefer private repositories, and
+  triage/close auto-review issues and PRs promptly so snippets do not accumulate
+  in history beyond their useful life.
+
 ## License
 
 MIT
