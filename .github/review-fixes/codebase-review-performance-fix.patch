@@ -1,0 +1,318 @@
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..8227d9a 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -1,9 +1,11 @@
+ name: Automated Codebase Review
+ 
+-# Two-stage pipeline: review → fix (if MEDIUM+ priority).
+-# Weekly deep-dive reviews across 11 focus areas, all running Sunday at 06:00 UTC.
+-# Each review analyzes the full codebase for its focus area, then the
+-# fix stage creates a PR with actual code changes.
++# Three-stage pipeline: review → collect-priorities → fix (per-area, MEDIUM+).
++# Weekly deep-dive reviews across 12 focus areas, all running Sunday at 06:00 UTC.
++# Each review analyzes the full codebase for its focus area and records its own
++# fix priority as a per-area artifact. The collect stage reads those artifacts
++# and launches a fix leg ONLY for the areas that found MEDIUM+ issues, so paid
++# Opus fix sessions are never spent on areas that reviewed clean.
+ #
+ # Schedule: Every Sunday at 06:00 UTC — all areas run simultaneously.
+ # Manual: workflow_dispatch to run any single area or all areas on demand.
+@@ -68,8 +70,6 @@ jobs:
+       max-parallel: 3
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+-    outputs:
+-      priority: ${{ steps.extract-priority.outputs.priority }}
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+@@ -170,15 +170,60 @@ jobs:
+           REVIEW_AREA: ${{ matrix.area }}
+           EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
+           REPO: ${{ github.repository }}
++          PRIORITY_FILE: ${{ runner.temp }}/priority.txt
+         run: .github/workflows/scripts/extract-review-priority.sh
+ 
+-  # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+-  fix:
++      # Persist this area's priority so the fix decision is made per-area.
++      # Matrix-job outputs collide (last leg wins), so an artifact is the only
++      # reliable way to carry one value per matrix leg to a downstream job.
++      - name: Upload priority artifact — ${{ matrix.area }}
++        if: always() && steps.extract-priority.outcome == 'success'
++        uses: actions/upload-artifact@v4
++        with:
++          name: priority-${{ matrix.area }}
++          path: ${{ runner.temp }}/priority.txt
++          retention-days: 1
++          if-no-files-found: error
++
++  # ─── Stage 2: Collect per-area priorities into the fix matrix ──────────────
++  # Reads every `priority-<area>` artifact and emits a matrix of ONLY the areas
++  # that reported MEDIUM/HIGH. This replaces gating on a single collided review
++  # output, which fanned out a paid Opus fix session for all 12 areas whenever
++  # any one leg happened to finish last with MEDIUM+.
++  collect-priorities:
+     needs: [determine-area, review]
++    if: always() && needs.review.result == 'success'
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    outputs:
++      fix_areas_json: ${{ steps.collect.outputs.fix_areas_json }}
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++        with:
++          fetch-depth: 1
++
++      - name: Download all priority artifacts
++        uses: actions/download-artifact@v4
++        with:
++          pattern: priority-*
++          path: priorities
++
++      - name: Collect areas needing fixes
++        id: collect
++        env:
++          PRIORITIES_DIR: priorities
++        run: .github/workflows/scripts/collect-fix-areas.sh
++
++  # ─── Stage 3: Fix (one leg per area that found MEDIUM+ issues) ─────────────
++  fix:
++    needs: [determine-area, review, collect-priorities]
+     if: |
+       always() &&
+       needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
++      needs.collect-priorities.result == 'success' &&
++      needs.collect-priorities.outputs.fix_areas_json != '' &&
++      needs.collect-priorities.outputs.fix_areas_json != '[]'
+     runs-on: ubuntu-latest
+     timeout-minutes: 90
+     permissions:
+@@ -190,13 +235,17 @@ jobs:
+     strategy:
+       fail-fast: false
+       max-parallel: 1
++      # Only the areas that reported MEDIUM/HIGH, each carrying its own
++      # priority — no leg is created for an area that reviewed clean.
+       matrix:
+-        area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
++        include: ${{ fromJson(needs.collect-priorities.outputs.fix_areas_json) }}
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+         with:
+-          fetch-depth: 0
++          # The fix only branches from HEAD, commits, and pushes — full history
++          # is not needed. Unshallow on demand if a fix ever needs deeper history.
++          fetch-depth: 1
+ 
+       - name: Fix review findings — ${{ matrix.area }}
+         uses: anthropics/claude-code-action@v1
+@@ -211,7 +260,7 @@ jobs:
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ matrix.priority }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+@@ -295,13 +344,13 @@ jobs:
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
+   notify:
+-    needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    needs: [review, collect-priorities, fix]
++    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.collect-priorities.result == 'failure' || needs.fix.result == 'failure')
+     runs-on: ubuntu-latest
+     steps:
+       - name: Notify on failure
+         run: |
+-          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
++          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Collect: ${{ needs.collect-priorities.result }}, Fix: ${{ needs.fix.result }}"
+           echo ""
+           echo "To add Slack notifications, replace this step with:"
+           echo "  uses: slackapi/slack-github-action@v3.0.1"
+diff --git a/.github/workflows/scripts/collect-fix-areas.sh b/.github/workflows/scripts/collect-fix-areas.sh
+new file mode 100755
+index 0000000..d75ffdb
+--- /dev/null
++++ b/.github/workflows/scripts/collect-fix-areas.sh
+@@ -0,0 +1,49 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Build the fix-job matrix from per-area review priorities.
++#
++# Each review matrix leg uploads an artifact named "priority-<area>" containing
++# a single file "priority.txt" with that area's MAXIMUM_FIX_PRIORITY value.
++# Those artifacts are downloaded into PRIORITIES_DIR as:
++#
++#   ${PRIORITIES_DIR}/priority-<area>/priority.txt
++#
++# This script emits a JSON array of {"area","priority"} objects for every area
++# whose priority is HIGH or MEDIUM. The fix job uses it as `matrix.include`, so
++# a (paid) Opus fix session is launched ONLY for areas with actionable
++# findings — instead of all areas, which is what the previous single,
++# last-writer-wins matrix output caused.
++#
++# Required env vars:
++#   GITHUB_OUTPUT
++#   PRIORITIES_DIR - directory containing the downloaded priority-* artifacts
++
++: "${GITHUB_OUTPUT:?}" "${PRIORITIES_DIR:?}"
++
++entries=()
++
++shopt -s nullglob
++for dir in "${PRIORITIES_DIR}"/priority-*/; do
++  area="$(basename "${dir}")"
++  area="${area#priority-}"
++  file="${dir}priority.txt"
++
++  if [[ ! -f "${file}" ]]; then
++    echo "Area ${area}: <no priority.txt>"
++    continue
++  fi
++
++  priority="$(tr -d '[:space:]' < "${file}")"
++  echo "Area ${area}: ${priority:-<empty>}"
++
++  if [[ "${priority}" == "HIGH" || "${priority}" == "MEDIUM" ]]; then
++    entries+=("{\"area\":\"${area}\",\"priority\":\"${priority}\"}")
++  fi
++done
++
++# Join the entries into a compact JSON array (empty -> []).
++json="[$(IFS=,; echo "${entries[*]:-}")]"
++
++echo "fix_areas_json=${json}" >> "${GITHUB_OUTPUT}"
++echo "Areas needing fixes: ${json}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..2a198ef 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -11,6 +11,9 @@ set -euo pipefail
+ #
+ # Optional env vars:
+ #   EXECUTION_FILE - path to the claude-code-action execution file
++#   PRIORITY_FILE  - if set, the resolved priority is also written here so it
++#                    can be uploaded as a per-area artifact (avoids relying on
++#                    a single, collided matrix-job output)
+ 
+ : "${GITHUB_OUTPUT:?}" "${REVIEW_AREA:?}" "${REPO:?}"
+ 
+@@ -42,3 +45,10 @@ fi
+ PRIORITY="${PRIORITY:-NONE}"
+ echo "MAXIMUM_FIX_PRIORITY for ${REVIEW_AREA}: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
++
++# Persist the priority for this area so the fix stage can decide per-area
++# (instead of reading a single matrix-job output that collides across legs).
++if [[ -n "${PRIORITY_FILE:-}" ]]; then
++  printf '%s\n' "${PRIORITY}" > "${PRIORITY_FILE}"
++  echo "Wrote priority to ${PRIORITY_FILE}"
++fi
+diff --git a/.github/workflows/scripts/tests/collect-fix-areas.test.sh b/.github/workflows/scripts/tests/collect-fix-areas.test.sh
+new file mode 100755
+index 0000000..aae432f
+--- /dev/null
++++ b/.github/workflows/scripts/tests/collect-fix-areas.test.sh
+@@ -0,0 +1,93 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Unit tests for collect-fix-areas.sh — the script that turns per-area review
++# priority artifacts into the fix-job matrix. This guards the core behaviour
++# that prevents fanning out a paid Opus fix session for every review area:
++# only HIGH/MEDIUM areas must appear in the emitted matrix.
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++COLLECT="${SCRIPT_DIR}/collect-fix-areas.sh"
++
++WORKDIR="$(mktemp -d)"
++trap 'rm -rf "${WORKDIR}"' EXIT
++
++failures=0
++
++# Create a downloaded-artifact layout: priorities/priority-<area>/priority.txt
++# $1 = priorities dir, then pairs of <area> <priority>.
++make_priorities() {
++  local dir="$1"; shift
++  rm -rf "${dir}"
++  while [[ $# -gt 0 ]]; do
++    local area="$1" prio="$2"; shift 2
++    mkdir -p "${dir}/priority-${area}"
++    printf '%s\n' "${prio}" > "${dir}/priority-${area}/priority.txt"
++  done
++}
++
++# Run collect-fix-areas.sh against a priorities dir and echo fix_areas_json.
++run_collect() {
++  local priorities_dir="$1"
++  local out_file
++  out_file="$(mktemp "${WORKDIR}/output.XXXXXX")"
++  GITHUB_OUTPUT="${out_file}" PRIORITIES_DIR="${priorities_dir}" bash "${COLLECT}" >/dev/null
++  grep -oP '^fix_areas_json=\K.*' "${out_file}"
++}
++
++assert_eq() {
++  local name="$1" expected="$2" actual="$3"
++  if [[ "${expected}" == "${actual}" ]]; then
++    echo "ok   - ${name}"
++  else
++    echo "FAIL - ${name}"
++    echo "         expected: ${expected}"
++    echo "         actual:   ${actual}"
++    failures=$((failures + 1))
++  fi
++}
++
++# 1. Only HIGH/MEDIUM areas are included; LOW/XLOW/NONE are excluded.
++make_priorities "${WORKDIR}/p1" \
++  security HIGH \
++  performance MEDIUM \
++  documentation LOW \
++  testing NONE \
++  privacy XLOW
++got="$(run_collect "${WORKDIR}/p1")"
++# Areas are emitted in shell-glob (sorted) order: performance, security.
++assert_eq "filters to HIGH/MEDIUM only" \
++  '[{"area":"performance","priority":"MEDIUM"},{"area":"security","priority":"HIGH"}]' \
++  "${got}"
++
++# 2. No actionable areas -> empty JSON array (fix job is skipped).
++make_priorities "${WORKDIR}/p2" \
++  documentation LOW \
++  testing NONE
++got="$(run_collect "${WORKDIR}/p2")"
++assert_eq "empty array when nothing actionable" '[]' "${got}"
++
++# 3. Completely empty priorities dir -> empty JSON array.
++mkdir -p "${WORKDIR}/p3"
++got="$(run_collect "${WORKDIR}/p3")"
++assert_eq "empty array when no artifacts" '[]' "${got}"
++
++# 4. Whitespace/newlines around the value are tolerated.
++make_priorities "${WORKDIR}/p4" correctness MEDIUM
++printf '  HIGH \n' > "${WORKDIR}/p4/priority-correctness/priority.txt"
++got="$(run_collect "${WORKDIR}/p4")"
++assert_eq "trims surrounding whitespace" \
++  '[{"area":"correctness","priority":"HIGH"}]' "${got}"
++
++# 5. A missing priority.txt for an area is skipped, not fatal.
++make_priorities "${WORKDIR}/p5" code-quality HIGH
++mkdir -p "${WORKDIR}/p5/priority-empty-area"
++got="$(run_collect "${WORKDIR}/p5")"
++assert_eq "skips artifact missing priority.txt" \
++  '[{"area":"code-quality","priority":"HIGH"}]' "${got}"
++
++if [[ "${failures}" -gt 0 ]]; then
++  echo "${failures} test(s) failed"
++  exit 1
++fi
++echo "All collect-fix-areas tests passed"
