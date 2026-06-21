@@ -119,12 +119,19 @@ The fix stage triggers your CI after pushing. Edit `trigger-ci-workflows.sh` to 
 WORKFLOWS="${WORKFLOWS:-ci.yml checks.yml test.yml}"
 ```
 
-### Slack Notifications
+### Failure Notifications
 
-The `notify` job in `codebase-review.yml` prints a warning by default. To get Slack alerts on failure:
+By default the `notify` job runs `notify-failure.sh`, which records the failure
+durably (opens or appends to an `auto-review-failure` tracking issue) **and**
+exits non-zero so the run is marked failed — a broken scheduled run never
+silently disappears. It fires for any non-success result (failure / cancelled /
+timed out) of `determine-area`, `review`, or `fix`. The PR review workflow has a
+matching `notify-failure` job that comments on the affected PR.
+
+To get Slack alerts on failure instead:
 
 1. Add `SLACK_WEBHOOK_URL` to your repo secrets
-2. Replace the notify step with:
+2. Replace the `Report failure` step with:
 
 ```yaml
 - name: Notify Slack on failure
@@ -146,6 +153,32 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
             - type: "mrkdwn"
               text: "*Run:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View>"
 ```
+
+### Helper scripts location & testing
+
+The pipeline's bash helpers live in `.github/scripts/` (not `.github/workflows/`).
+Keeping them outside `.github/workflows/` matters: a GitHub App / Actions token
+without the `workflows` permission cannot modify anything under
+`.github/workflows/`, so housing the scripts there blocks the auto-fix bot from
+ever fixing a bug in its own helpers. From `.github/scripts/` they remain
+bot-maintainable.
+
+The scripts have unit tests that stub `gh` (no network needed):
+
+```bash
+shellcheck .github/scripts/*.sh .github/scripts/tests/*.sh
+bash .github/scripts/tests/run-tests.sh
+```
+
+The tests cover the failure paths: a failed `gh` call must not be silently
+coerced to a benign `NONE`/skip, CI-trigger errors must surface, and failure
+notifications must be durable.
+
+> **Maintainer note:** The workflow YAML in `.github/workflows/` must reference
+> the scripts at their `.github/scripts/` path and wire up the notify jobs /
+> per-area fix gating. Ready-to-use copies are in
+> `.github/scripts/proposed-workflows/` — copy them over `.github/workflows/`
+> (requires a token with `workflows` permission).
 
 ### Using Your Own CLAUDE.md
 

@@ -1,0 +1,272 @@
+name: Claude PR Review
+
+# Two-stage pipeline: review → fix (if needed).
+# Triggers: PR events (auto), /claude-review (manual review), /claude-fix (manual fix).
+
+on:
+  pull_request:
+    types:
+      - ready_for_review
+      - opened
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ─── Stage 1: Review ───────────────────────────────────────────────────────
+  review:
+    # Run on PR events (not dependabot), or on "/claude-review" comments on PRs
+    if: |
+      (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+    outputs:
+      follow_up: ${{ steps.check-followup.outputs.priority }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: PR Review
+        id: review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          claude_args: >-
+            --dangerously-skip-permissions
+            --model opus
+            --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before reviewing. It contains the project's coding standards and conventions. Treat it as authoritative."
+
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+
+            You are reviewing a pull request. If a CLAUDE.md exists, read it first.
+            Review the diff against these focus areas. Only comment on things that
+            actually appear in the changed code — skip sections not relevant to this PR.
+
+            1. **Security & Authorization**
+               - API endpoints that access user data verify identity
+               - Admin-only functions enforce admin access
+               - Ownership checks prevent cross-user data access
+               - No secrets in code, no logging of sensitive data
+               - Input validation on all user-provided data
+
+            2. **Privacy & Data Protection**
+               - PII never appears in production logs
+               - New data collection is minimal and justified
+               - Visibility/permission settings are respected
+               - Third-party data sharing is explicit and consensual
+
+            3. **Error Handling (Fail Fast, Fail Loud)**
+               - NEVER `catch (_e) {}` or `.catch(() => {})` — this hides bugs
+               - Backend: prefer throwing; let the framework catch unhandled errors
+               - Frontend: graceful degradation is fine, BUT always report to error service
+               - Ask: "If this fails in production, will we find out?"
+
+            4. **Code Quality & Style**
+               - No `any` types, use `import type` for type-only imports
+               - Follow project formatting conventions
+               - No `console.log` in production code
+               - No floating or misused promises
+
+            5. **Scalability & Performance**
+               - Database queries use indexes for large tables, not full scans
+               - Watch for N+1 patterns
+               - Rate limiting and cost controls are not bypassed
+               - Bundle size: flag large new dependencies
+
+            6. **Testing**
+               - New logic needs tests
+               - NEVER mock internal code — only mock external services
+               - Tests should exercise real code paths
+               - Assertions are meaningful, not just `toBeDefined()`
+
+            7. **Documentation Accuracy**
+               - If the PR touches code with associated docs, verify they still match
+               - New public functions/APIs should have clear descriptions
+               - Flag stale docs that reference removed or renamed code
+
+            ---
+
+            Format: Provide all feedback in a single comment with numbered items.
+            Do NOT prefix numbers with `#` (GitHub treats that as issue links).
+            For each item, reference the file and line. Prioritize by severity.
+
+            ## REQUIRED: Maximum Fix Priority
+
+            After all review items, you MUST end your review with a maximum fix
+            priority assessment.
+
+            Values:
+            - NONE — No issues need code changes. PR is good to merge as-is.
+            - XLOW — Only trivial nits not worth an automated fix cycle.
+            - LOW — Minor issues worth fixing but not blocking merge.
+            - MEDIUM — Real issues (missing error handling, missing tests) to fix.
+            - HIGH — Critical issues found (security, data leaks, broken logic).
+
+            You MUST end your review with EXACTLY one of these on its own line:
+
+            MAXIMUM_FIX_PRIORITY:NONE
+            MAXIMUM_FIX_PRIORITY:XLOW
+            MAXIMUM_FIX_PRIORITY:LOW
+            MAXIMUM_FIX_PRIORITY:MEDIUM
+            MAXIMUM_FIX_PRIORITY:HIGH
+
+      - name: Check follow-up priority
+        id: check-followup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: .github/scripts/extract-pr-review-priority.sh
+
+  # ─── Stage 2: Fix (only if review found issues worth fixing) ────────────────
+  fix-review-issues:
+    needs: review
+    # Run after review if priority is LOW/MEDIUM/HIGH, or directly on "/claude-fix"
+    if: |
+      always() && (
+        (needs.review.result == 'success' && (needs.review.outputs.follow_up == 'HIGH' || needs.review.outputs.follow_up == 'MEDIUM' || needs.review.outputs.follow_up == 'LOW')) ||
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Fix review issues
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          claude_args: >-
+            --dangerously-skip-permissions
+            --model opus
+            --max-turns 250
+            --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative."
+
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+            REVIEW FOLLOW-UP PRIORITY: ${{ needs.review.outputs.follow_up || 'MANUAL' }}
+
+            ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+
+            Your ONLY job is to **edit code, commit changes, and push fixes**.
+            You must NOT write a review. You must NOT post a comment listing
+            issues. If you finish without making any git commits, you have FAILED.
+
+            **Your output is CODE CHANGES, not commentary.**
+
+            ## Step 1: Read the review and understand EVERY issue (MANDATORY)
+
+            **THIS IS YOUR PRIMARY INPUT. DO NOT SKIP THIS STEP.**
+
+            Read ALL comments on this PR, especially from the code review.
+            The review contains numbered findings with severity levels.
+            You MUST fix every issue rated LOW or higher.
+
+            **How to read the review:**
+            a) Use `gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments"` to fetch all PR comments.
+            b) Look for the review comment with numbered findings.
+            c) For EACH finding rated LOW or above, understand what file and
+               line it refers to, what the problem is, and what the fix should be.
+
+            **CRITICAL: "CI is green" does NOT mean the review is addressed.**
+            The review found problems that CI cannot detect. You MUST fix review
+            findings even when CI is green.
+
+            ## Step 2: Gather additional context
+
+            a) **CI check failures** — run `gh pr checks $PR_NUMBER`. If any failed,
+               read their logs.
+            b) **Run quality gates yourself** — the project's lint, type check,
+               and test commands. Fix any failures first.
+            c) **The PR diff itself** — read the changed files for obvious bugs.
+
+            ## Step 3: Fix everything
+
+            **Make actual code changes.** Edit files. Write new test cases.
+
+            Rules:
+            - **Do NOT skip hard fixes.**
+            - **Tests are MANDATORY** if the review flagged missing tests.
+            - **Fix tests correctly.** NEVER delete or skip a test to make CI green.
+            - **Priority order:** security > correctness > performance > tests > style.
+
+            ## Step 4: Verify quality gates pass locally
+
+            Run the project's lint, type check, and test commands.
+            Do NOT push until all pass.
+
+            ## Step 5: Commit and push
+
+            - Each commit explains what was fixed and why.
+            - Push your commits to the PR branch.
+
+            ## Step 6: WAIT FOR CI AND FIX UNTIL GREEN (CRITICAL)
+
+            After pushing, monitor CI and iterate until ALL checks pass (max 3 iterations).
+
+            ## Formatting rule
+
+            In commit messages and PR comments, NEVER use `#` followed by a number.
+            Use `item 1`, `item 3`, or `1.`, `3.` instead.
+
+            ## REMINDER — SUCCESS CRITERIA (ALL THREE REQUIRED)
+
+            1. You read the review and fixed every finding rated LOW or above
+            2. You pushed code fixes (not reviews or comments)
+            3. ALL CI checks are green
+
+  # ─── Notify on failure ──────────────────────────────────────────────────────
+  # A PR run usually has a human watching the checks, but a silently failed
+  # auto-fix job can still leave a PR looking unreviewed. Surface any non-success
+  # terminal result as a comment on the PR so the author sees it.
+  notify-failure:
+    needs: [review, fix-review-issues]
+    if: |
+      always() &&
+      (github.event.pull_request.number || github.event.issue.number) &&
+      (contains(needs.*.result, 'failure') ||
+       contains(needs.*.result, 'cancelled') ||
+       contains(needs.*.result, 'timed_out'))
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Comment failure on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REVIEW_RESULT: ${{ needs.review.result }}
+          FIX_RESULT: ${{ needs.fix-review-issues.result }}
+        run: .github/scripts/notify-pr-failure.sh
