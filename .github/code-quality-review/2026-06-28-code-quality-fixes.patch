@@ -1,0 +1,286 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..a91c27f
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,34 @@
++name: CI
++
++# Quality gates for the review system itself: lint the Bash scripts and assert
++# the review-area lists stay in sync. Runs on PRs/pushes and is dispatchable so
++# the codebase-review fix stage can trigger it on its branch (see
++# .github/workflows/scripts/trigger-ci-workflows.sh).
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++jobs:
++  lint:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: ShellCheck scripts
++        run: shellcheck .github/workflows/scripts/*.sh
++
++      - name: Bash syntax check
++        run: |
++          for f in .github/workflows/scripts/*.sh; do
++            bash -n "$f"
++          done
++
++      - name: Review-area lists in sync
++        run: .github/workflows/scripts/check-review-areas-in-sync.sh
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..546306d 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -1,7 +1,7 @@
+ name: Automated Codebase Review
+ 
+ # Two-stage pipeline: review → fix (if MEDIUM+ priority).
+-# Weekly deep-dive reviews across 11 focus areas, all running Sunday at 06:00 UTC.
++# Weekly deep-dive reviews across 12 focus areas, all running Sunday at 06:00 UTC.
+ # Each review analyzes the full codebase for its focus area, then the
+ # fix stage creates a PR with actual code changes.
+ #
+@@ -17,6 +17,8 @@ on:
+         description: 'Review area to run (or "all" to run every area)'
+         required: true
+         type: choice
++        # Keep this list in sync with ALL_AREAS in
++        # .github/workflows/scripts/resolve-review-area.sh (plus the trailing "all").
+         options:
+           - security
+           - privacy
+@@ -175,10 +177,16 @@ jobs:
+   # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+   fix:
+     needs: [determine-area, review]
++    # NOTE: do NOT gate this job on needs.review.outputs.priority. The review job
++    # is a matrix; GitHub Actions does not namespace matrix outputs per leg, so
++    # that scalar holds whichever leg finished last (nondeterministic) — gating on
++    # it silently skips real findings on scheduled "all" runs. Instead, run the fix
++    # job for every area and let each matrix leg re-derive its OWN area's priority
++    # from that area's review issue (the "Determine fix priority" step below),
++    # skipping the expensive fix work when that area is below MEDIUM.
+     if: |
+       always() &&
+-      needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
++      (needs.review.result == 'success' || needs.review.result == 'failure')
+     runs-on: ubuntu-latest
+     timeout-minutes: 90
+     permissions:
+@@ -198,7 +206,19 @@ jobs:
+         with:
+           fetch-depth: 0
+ 
++      # Re-derive THIS area's priority from its own review issue, so the gating is
++      # deterministic per matrix leg instead of relying on the shared review-job
++      # output (see the note on this job's `if:` above).
++      - name: Determine fix priority for ${{ matrix.area }}
++        id: gate
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REVIEW_AREA: ${{ matrix.area }}
++          REPO: ${{ github.repository }}
++        run: .github/workflows/scripts/extract-review-priority.sh
++
+       - name: Fix review findings — ${{ matrix.area }}
++        if: steps.gate.outputs.priority == 'HIGH' || steps.gate.outputs.priority == 'MEDIUM'
+         uses: anthropics/claude-code-action@v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+@@ -211,7 +231,7 @@ jobs:
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ steps.gate.outputs.priority }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+@@ -285,18 +305,23 @@ jobs:
+ 
+       # Trigger CI on the new PR branch (customize workflow names for your project)
+       - name: Trigger CI workflows
+-        if: success()
++        if: success() && (steps.gate.outputs.priority == 'HIGH' || steps.gate.outputs.priority == 'MEDIUM')
+         env:
+-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          GH_TOKEN: ${{ github.token }}
+           REPO: ${{ github.repository }}
+         run: |
+-          export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          # Use the branch the fix step actually created/pushed (HEAD) as the single
++          # source of truth, rather than reconstructing it from the current date —
++          # the 90-minute fix job can cross 00:00 UTC and a recomputed date would
++          # then point at a branch that does not exist.
++          BRANCH=$(git rev-parse --abbrev-ref HEAD)
++          export BRANCH
+           .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
+   notify:
+     needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    if: always() && (needs.review.result == 'failure' || needs.fix.result == 'failure')
+     runs-on: ubuntu-latest
+     steps:
+       - name: Notify on failure
+diff --git a/.github/workflows/scripts/check-review-areas-in-sync.sh b/.github/workflows/scripts/check-review-areas-in-sync.sh
+new file mode 100755
+index 0000000..f43b14d
+--- /dev/null
++++ b/.github/workflows/scripts/check-review-areas-in-sync.sh
+@@ -0,0 +1,40 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Guard against drift between the two places the review-area list lives:
++#   1. ALL_AREAS in resolve-review-area.sh (canonical, used by the schedule)
++#   2. the workflow_dispatch `review_area` dropdown in codebase-review.yml
++#
++# The dropdown must be static YAML (it cannot call the script), so the
++# duplication is structural — this check makes the duplication safe by failing
++# loud if the two ever disagree. The dropdown carries one extra "all" sentinel
++# that is intentionally not part of the canonical set.
++#
++# No required env vars; resolves paths relative to this script.
++
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
++SCRIPT="${ROOT}/.github/workflows/scripts/resolve-review-area.sh"
++WORKFLOW="${ROOT}/.github/workflows/codebase-review.yml"
++
++# 1. Areas declared in the script's ALL_AREAS JSON array.
++script_areas=$(grep -oP "ALL_AREAS='\K[^']+" "${SCRIPT}" \
++  | grep -oP '"[a-z][a-z-]*"' | tr -d '"' | sort)
++
++# 2. Dropdown options, minus the trailing "all" sentinel.
++dropdown_areas=$(awk '
++  /^[[:space:]]*options:/ { inopts=1; next }
++  inopts && /^[[:space:]]*-[[:space:]]/ { sub(/^[[:space:]]*-[[:space:]]*/, ""); print; next }
++  inopts && !/^[[:space:]]*#/ { exit }
++' "${WORKFLOW}" | grep -vx 'all' | sort)
++
++if [[ "${script_areas}" != "${dropdown_areas}" ]]; then
++  echo "::error::Review-area lists are out of sync between:" >&2
++  echo "  - ${SCRIPT} (ALL_AREAS)" >&2
++  echo "  - ${WORKFLOW} (workflow_dispatch options)" >&2
++  echo "--- diff (< script  > dropdown) ---" >&2
++  diff <(echo "${script_areas}") <(echo "${dropdown_areas}") >&2 || true
++  exit 1
++fi
++
++count=$(echo "${script_areas}" | grep -c .)
++echo "Review-area lists are in sync (${count} areas): $(echo "${script_areas}" | tr '\n' ' ')"
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..9136876 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -9,11 +9,22 @@ set -euo pipefail
+ #   REPO - GitHub repository (owner/repo)
+ #   PR_NUMBER - the PR number
+ 
+-: "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR_NUMBER:?}"
++: "${GITHUB_OUTPUT:?}" "${GH_TOKEN:?}" "${REPO:?}" "${PR_NUMBER:?}"
+ 
+-PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+-  --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
+-  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
++# Fetch the latest PR comment that carries a MAXIMUM_FIX_PRIORITY token.
++# Fail loud on a genuine API error instead of masking it as "no findings": a
++# swallowed failure here resolves to NONE and silently skips the fix stage.
++if ! COMMENT_BODY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
++  --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body'); then
++  echo "::error::Failed to fetch comments for ${REPO} item ${PR_NUMBER} (gh api error)." >&2
++  exit 1
++fi
++
++# Collapse any extra matches to a single line (matching extract-review-priority.sh).
++# A multi-line value would corrupt the GITHUB_OUTPUT and mis-trigger the fix gate.
++PRIORITY=$(printf '%s\n' "${COMMENT_BODY}" \
++  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' | tail -1 || true)
++PRIORITY="${PRIORITY:-NONE}"
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..21ef2cd 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -5,9 +5,9 @@ set -euo pipefail
+ #
+ # Required env vars:
+ #   GITHUB_OUTPUT
+-#   GH_TOKEN
+ #   REVIEW_AREA - the review area name (e.g. "security")
+ #   REPO - GitHub repository (owner/repo)
++#   GH_TOKEN - required only for the API fallback (validated at point of use below)
+ #
+ # Optional env vars:
+ #   EXECUTION_FILE - path to the claude-code-action execution file
+@@ -27,15 +27,23 @@ fi
+ 
+ # Method 2 (fallback): list recent issues via REST API
+ if [[ -z "${PRIORITY}" ]]; then
++  # GH_TOKEN is only needed for this API fallback; validate it here so the
++  # docs ("Required env vars") and runtime validation agree without breaking
++  # the execution-file path above.
++  : "${GH_TOKEN:?}"
+   echo "Falling back to gh issue list..."
+-  BODY=$(gh issue list \
++  # Fail loud on a genuine API error instead of collapsing it to NONE — a
++  # swallowed failure would masquerade as a clean review and drop real findings.
++  if ! BODY=$(gh issue list \
+     --repo "${REPO}" \
+     --state all --limit 10 \
+     --json title,body \
+-    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
+-    2>/dev/null || true)
+-  PRIORITY=$(echo "${BODY}" \
+-    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
++    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body"); then
++    echo "::error::Failed to list issues for ${REPO} (gh issue list error)." >&2
++    exit 1
++  fi
++  PRIORITY=$(printf '%s\n' "${BODY}" \
++    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' | tail -1 || true)
+   echo "Extracted from issue list: ${PRIORITY:-<empty>}"
+ fi
+ 
+diff --git a/.github/workflows/scripts/resolve-review-area.sh b/.github/workflows/scripts/resolve-review-area.sh
+index 71631a5..5090ff9 100755
+--- a/.github/workflows/scripts/resolve-review-area.sh
++++ b/.github/workflows/scripts/resolve-review-area.sh
+@@ -12,6 +12,9 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${EVENT_NAME:?}"
+ 
++# Canonical list of review areas. Keep in sync with the workflow_dispatch
++# `review_area` dropdown options in .github/workflows/codebase-review.yml
++# (the dropdown adds a trailing "all" entry that is not part of this set).
+ ALL_AREAS='["security","privacy","compliance","ai-compliance","error-handling","code-quality","performance","testing","documentation","dependency-health","correctness","e-commerce"]'
+ 
+ if [[ "${EVENT_NAME}" = "workflow_dispatch" ]]; then
+diff --git a/.github/workflows/scripts/trigger-ci-workflows.sh b/.github/workflows/scripts/trigger-ci-workflows.sh
+index 0bb1846..c3fc271 100755
+--- a/.github/workflows/scripts/trigger-ci-workflows.sh
++++ b/.github/workflows/scripts/trigger-ci-workflows.sh
+@@ -14,7 +14,7 @@ set -euo pipefail
+ # If WORKFLOWS is not set, this script will attempt to trigger common CI
+ # workflow names. Customize the WORKFLOWS variable for your project.
+ 
+-: "${REPO:?}" "${BRANCH:?}"
++: "${GH_TOKEN:?}" "${REPO:?}" "${BRANCH:?}"
+ 
+ # Default: try common CI workflow names. Override with WORKFLOWS env var.
+ WORKFLOWS="${WORKFLOWS:-ci.yml checks.yml test.yml}"
