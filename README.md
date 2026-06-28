@@ -1,4 +1,6 @@
-# Claude Code Review
+# Claude Code Review (autotune)
+
+> **autotune** is the project/repository name for this Claude Code review system.
 
 Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 12 focus areas, finds issues, and auto-fixes them via pull requests.
 
@@ -30,7 +32,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All 12 areas are scheduled together every **Sunday at 06:00 UTC** and run up to 3 at a time (`max-parallel: 3`); fixes run one at a time (`max-parallel: 1`). You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -46,9 +48,9 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 ---
 
 ```
-Install the claude-code-review system from https://github.com/core-nexus/claude-code-review into this repository. Here's what to do:
+Install the autotune (Claude Code Review) system from https://github.com/core-nexus/autotune into this repository. Here's what to do:
 
-1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
+1. Clone or fetch the review system files from https://github.com/core-nexus/autotune
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
    - .github/review-prompts/  (all 12 .md files)
@@ -162,7 +164,7 @@ Sunday 06:00 UTC (or manual trigger)
 ┌─────────────────────────────────────┐
 │  STAGE 1: REVIEW (30 min timeout)   │
 │                                     │
-│  For each review area (in parallel):│
+│  Per area (up to 3 at a time):      │
 │  1. Read CLAUDE.md + review prompt  │
 │  2. Deep-dive audit of codebase     │
 │  3. Create GitHub issue with        │
@@ -191,14 +193,14 @@ PR opened / ready for review / /claude-review comment
         │
         ▼
 ┌─────────────────────────────────────┐
-│  STAGE 1: REVIEW                    │
+│  STAGE 1: REVIEW (30 min timeout)   │
 │  Post review comment with findings  │
 │  Set MAXIMUM_FIX_PRIORITY           │
 └─────────────────────────────────────┘
         │
         ▼ (if LOW, MEDIUM, or HIGH)
 ┌─────────────────────────────────────┐
-│  STAGE 2: FIX                       │
+│  STAGE 2: FIX (120 min timeout)     │
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
@@ -251,7 +253,7 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 
 ## Cost Considerations
 
-Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
+Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. Note that reviews are throttled to 3 concurrent sessions (`max-parallel: 3`) and fixes run one at a time (`max-parallel: 1`), so this caps concurrency but not the total number of sessions. To reduce costs:
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
