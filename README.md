@@ -39,6 +39,28 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 - A GitHub repository
 - A [Claude Code OAuth token](https://docs.anthropic.com/en/docs/claude-code/github-actions) (`CLAUDE_CODE_OAUTH_TOKEN` secret)
 
+### Data Processing & Permissions Note
+
+Before enabling these workflows, understand what they do with your repository:
+
+- **Repository contents are sent to a third party.** Every review and fix run
+  transmits your repository contents (and, for PR reviews, the PR diff) to
+  Anthropic for processing via the
+  [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action).
+  If your repository may contain personal data, internal identifiers, secrets,
+  or customer data (e.g. in fixtures or seed files), this is a processing
+  activity and data transfer that should be a conscious, documented decision.
+  Review [Anthropic's data-processing terms](https://www.anthropic.com/legal/commercial-terms)
+  and confirm an appropriate processor/DPA relationship before enabling
+  scheduled runs — and consider restricting these workflows to repositories
+  that do not store production personal data.
+- **The fix stage runs autonomously with write access.** The Stage 2 fix jobs
+  run with `contents: write` and `pull-requests: write` permissions and invoke
+  Claude with `--dangerously-skip-permissions`, so Claude edits code, creates
+  branches, and opens PRs without per-action approval. Make sure this fits your
+  change-control and review requirements (e.g. branch protection, required
+  reviews) before turning the automation on.
+
 ### Quick Install (Copy-Paste for Claude)
 
 **Copy this entire block into Claude Code (or any AI coding agent) and let it install the system into your repo:**
