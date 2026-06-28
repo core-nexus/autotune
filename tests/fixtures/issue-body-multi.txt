@@ -1,0 +1,6 @@
+## Review findings
+
+The body quotes the allowed values (MAXIMUM_FIX_PRIORITY:LOW,
+MAXIMUM_FIX_PRIORITY:MEDIUM, MAXIMUM_FIX_PRIORITY:HIGH) before its conclusion.
+
+MAXIMUM_FIX_PRIORITY:MEDIUM

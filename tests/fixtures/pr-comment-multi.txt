@@ -1,0 +1,5 @@
+Reviewed this PR. For reference the priority scale is
+MAXIMUM_FIX_PRIORITY:LOW through MAXIMUM_FIX_PRIORITY:MEDIUM up to the top.
+
+Final call:
+MAXIMUM_FIX_PRIORITY:HIGH
