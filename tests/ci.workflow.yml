@@ -1,0 +1,64 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ MOVE THIS FILE to .github/workflows/ci.yml to activate it.                 │
+# │                                                                            │
+# │ It is parked here under tests/ because the automated review bot that       │
+# │ opened this PR authenticates as a GitHub App without the `workflows`       │
+# │ permission, so it cannot create or update files under .github/workflows/.  │
+# │ A maintainer (or any token with `workflows` scope) just needs to run:      │
+# │     git mv tests/ci.workflow.yml .github/workflows/ci.yml                  │
+# │                                                                            │
+# │ When activating, also apply the blocked script fixes so the shellcheck     │
+# │ and actionlint jobs below pass (they include an SC2155 cleanup in          │
+# │ codebase-review.yml that this file's actionlint job would otherwise flag): │
+# │     git apply tests/patches/scripts-fixes.patch                            │
+# └──────────────────────────────────────────────────────────────────────────┘
+name: CI
+
+# Static checks and tests for the automation scripts and workflow YAML.
+#
+# This repo's only executable logic lives in .github/workflows/scripts/*.sh,
+# and those scripts gate a workflow that can write code and open PRs. This
+# workflow guards them with shellcheck, actionlint, and a bats test suite so a
+# silent parsing/quoting regression is caught before it ships.
+#
+# Also exposed via workflow_dispatch so the review automation's
+# "Trigger CI workflows" step (which dispatches ci.yml) can run it on a
+# freshly-pushed review branch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on automation scripts
+        run: shellcheck .github/workflows/scripts/*.sh
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download actionlint
+        run: bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      - name: Run actionlint
+        run: ./actionlint -color
+
+  test:
+    name: bats
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run script test suite
+        run: bats tests/
