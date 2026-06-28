@@ -1,0 +1,83 @@
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..19381e1 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -290,7 +290,8 @@ jobs:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+         run: |
+-          export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          export BRANCH
+           .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..b3c33ff 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -13,7 +13,7 @@ set -euo pipefail
+ 
+ PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+   --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
+-  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
++  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' | tail -1 || echo "NONE")
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..3f0f5d3 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -35,7 +35,7 @@ if [[ -z "${PRIORITY}" ]]; then
+     --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
+     2>/dev/null || true)
+   PRIORITY=$(echo "${BODY}" \
+-    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
++    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' | tail -1 || true)
+   echo "Extracted from issue list: ${PRIORITY:-<empty>}"
+ fi
+ 
+diff --git a/.github/workflows/scripts/resolve-review-area.sh b/.github/workflows/scripts/resolve-review-area.sh
+index 71631a5..d2bf450 100755
+--- a/.github/workflows/scripts/resolve-review-area.sh
++++ b/.github/workflows/scripts/resolve-review-area.sh
+@@ -12,14 +12,36 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${EVENT_NAME:?}"
+ 
+-ALL_AREAS='["security","privacy","compliance","ai-compliance","error-handling","code-quality","performance","testing","documentation","dependency-health","correctness","e-commerce"]'
++# Single source of truth for the known review areas. The JSON array form
++# consumed by the workflow matrix is derived from this list so the two can
++# never drift apart.
++KNOWN_AREAS=(
++  security privacy compliance ai-compliance error-handling code-quality
++  performance testing documentation dependency-health correctness e-commerce
++)
++
++ALL_AREAS=$(printf '"%s",' "${KNOWN_AREAS[@]}")
++ALL_AREAS="[${ALL_AREAS%,}]"
++
++# is_known_area <area> — return 0 if the argument is one of the known areas.
++is_known_area() {
++  local candidate="$1" area
++  for area in "${KNOWN_AREAS[@]}"; do
++    [[ "${candidate}" = "${area}" ]] && return 0
++  done
++  return 1
++}
+ 
+ if [[ "${EVENT_NAME}" = "workflow_dispatch" ]]; then
+   AREA="${INPUT_REVIEW_AREA:-security}"
+   if [[ "${AREA}" = "all" ]]; then
+     echo "areas_json=${ALL_AREAS}" >> "${GITHUB_OUTPUT}"
+-  else
++  elif is_known_area "${AREA}"; then
+     echo "areas_json=[\"${AREA}\"]" >> "${GITHUB_OUTPUT}"
++  else
++    echo "Error: unknown review area '${AREA}'." >&2
++    echo "Valid areas: ${KNOWN_AREAS[*]} all" >&2
++    exit 1
+   fi
+ else
+   # Schedule trigger: run all areas at once (Sunday morning)
