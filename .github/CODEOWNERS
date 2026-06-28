@@ -1,0 +1,17 @@
+# Code owners for this repository.
+#
+# The workflow files are the highest-privilege code here: they run autonomous
+# agents with write tokens, repo secrets, and OIDC. Changes to them MUST be
+# reviewed by a designated owner. Combine this with branch protection that
+# requires CODEOWNERS review on the default branch.
+#
+# Replace the placeholder owner below with your org's security/maintainers team
+# or specific usernames (e.g. @core-nexus/security-team) for it to take effect.
+
+# Everything, by default.
+*                          @core-nexus/maintainers
+
+# Privileged automation — require explicit review of any workflow/script change.
+/.github/workflows/        @core-nexus/maintainers
+/.github/dependabot.yml    @core-nexus/maintainers
+/.github/CODEOWNERS        @core-nexus/maintainers

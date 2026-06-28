@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # Keep the GitHub Actions used by the review/fix workflows up to date. The
+  # actions are pinned to commit SHAs for supply-chain integrity (A08); this
+  # lets Dependabot bump those SHAs to vetted new releases via PRs.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "auto-review"

@@ -38,6 +38,43 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 
 - A GitHub repository
 - A [Claude Code OAuth token](https://docs.anthropic.com/en/docs/claude-code/github-actions) (`CLAUDE_CODE_OAUTH_TOKEN` secret)
+- **Branch protection on your default branch** (see Security Hardening below)
+
+### Security Hardening (required)
+
+This template runs **autonomous agents with `contents: write` and repo
+secrets**. Treat the following as setup steps, not optional extras:
+
+1. **Protect your default branch.** The fix jobs hold a write token and could,
+   if misused or prompt-injected, push directly to `main`. Enable branch
+   protection so the only path to the default branch is a reviewed PR:
+   - Require a pull request before merging, with at least one approval.
+   - Require status checks to pass.
+   - Require review from Code Owners (a `CODEOWNERS` file ships in `.github/`).
+   - Do **not** allow force pushes or direct pushes to the protected branch.
+
+   ```bash
+   gh api -X PUT repos/OWNER/REPO/branches/main/protection \
+     -f 'required_pull_request_reviews[required_approving_review_count]=1' \
+     -f 'required_pull_request_reviews[require_code_owner_reviews]=true' \
+     -F 'enforce_admins=true' \
+     -F 'required_status_checks=null' \
+     -F 'restrictions=null'
+   ```
+
+2. **Restrict who can trigger the agents.** The `/claude-review` and
+   `/claude-fix` comment commands only run for users whose
+   `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. Do not loosen
+   this gate — `issue_comment` events run with full repository secrets
+   regardless of who commented.
+
+3. **Set `CODEOWNERS` to a real team/user.** The shipped `.github/CODEOWNERS`
+   uses a placeholder (`@core-nexus/maintainers`); replace it with your own so
+   CODEOWNERS review actually applies to workflow changes.
+
+4. **Keep the pinned Action SHAs current.** Third-party Actions are pinned to
+   commit SHAs (not mutable tags) for supply-chain integrity. `.github/dependabot.yml`
+   is configured to bump them via PRs — keep it enabled.
 
 ### Quick Install (Copy-Paste for Claude)
 
@@ -88,7 +125,8 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 3. Add `CLAUDE_CODE_OAUTH_TOKEN` to your repo's Actions secrets
 4. Create the `auto-review` label: `gh label create auto-review --description "Automated codebase review" --color "0E8A16"`
 5. Customize (see Configuration below)
-6. Push to your default branch
+6. Apply the Security Hardening steps above (branch protection, CODEOWNERS)
+7. Push to your default branch
 
 ## Configuration
 
