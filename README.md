@@ -222,6 +222,52 @@ PR opened / ready for review / /claude-review comment
 
 Follow the existing prompt structure: Objective, Review Checklist with checkboxes, and Severity Guide.
 
+## Testing
+
+The automation scripts under `.github/workflows/scripts/` are the only
+executable logic in this repo, and they gate a workflow that can write code and
+open PRs — so they are covered by tests.
+
+- **Test suite:** [bats](https://github.com/bats-core/bats-core) tests live in
+  `tests/`, one `*.bats` file per script, mirroring the script layout. Fixtures
+  live in `tests/fixtures/`; shared helpers (including a fixture-backed `gh`
+  stub so the parsing paths run offline) live in `tests/helpers/`.
+- **Static checks:** `shellcheck` lints the scripts and `actionlint` validates
+  the workflow YAML.
+
+Run everything locally the same way CI does:
+
+```bash
+# Install bats (Debian/Ubuntu); shellcheck/actionlint similarly via your package manager
+sudo apt-get install -y bats shellcheck
+
+# Run the test suite
+bats tests/
+
+# Lint the scripts
+shellcheck .github/workflows/scripts/*.sh
+```
+
+### Pending script fixes (apply with a `workflows`-scoped token)
+
+The GitHub App that maintains this repo cannot commit changes under
+`.github/workflows/` (it lacks the `workflows` permission). Two deliverables of
+this change therefore ship outside that directory and must be moved/applied by a
+maintainer (or any token with the `workflows` scope):
+
+```bash
+# 1. Apply the script fixes (priority-parsing tail -1 + area validation + an
+#    SC2155 cleanup in codebase-review.yml) to the live workflow tree:
+git apply tests/patches/scripts-fixes.patch
+
+# 2. Activate the CI workflow (shellcheck + actionlint + bats):
+git mv tests/ci.workflow.yml .github/workflows/ci.yml
+```
+
+The bats suite already exercises the **fixed** behavior: it runs against a
+throwaway copy of the scripts with `tests/patches/scripts-fixes.patch` applied,
+so `bats tests/` is green both before and after step 1.
+
 ## File Structure
 
 ```
@@ -247,6 +293,17 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         ├── extract-review-priority.sh
         ├── extract-pr-review-priority.sh
         └── trigger-ci-workflows.sh
+tests/
+├── ci.workflow.yml             # CI (shellcheck + actionlint + bats); move to .github/workflows/ci.yml
+├── resolve-review-area.bats
+├── extract-review-priority.bats
+├── extract-pr-review-priority.bats
+├── trigger-ci-workflows.bats
+├── fixtures/                    # sample execution/issue/comment bodies
+├── patches/
+│   └── scripts-fixes.patch      # script fixes the bot can't push; git apply to the workflow tree
+└── helpers/
+    └── common.bash              # shared setup + gh stub
 ```
 
 ## Cost Considerations
