@@ -1,0 +1,18 @@
+version: 2
+
+updates:
+  # Keep the GitHub Actions supply chain current. Actions in the workflows are
+  # pinned to full commit SHAs for immutability; Dependabot bumps the SHA and
+  # updates the trailing version comment when a new release is published.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "auto-review"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
