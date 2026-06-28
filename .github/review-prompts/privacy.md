@@ -5,6 +5,29 @@
 Deep-dive privacy audit ensuring user data is handled with care, minimized,
 and protected throughout the codebase.
 
+## ⚠️ Reporting Rules — Never Republish PII (read first)
+
+This review writes findings into durable, broadly-visible artifacts (GitHub
+issues, PR bodies, commit messages). On public repos those are world-readable.
+A privacy audit must NOT itself leak the data it is auditing.
+
+- **Never paste a literal PII or secret value** into a finding, comment, issue,
+  or commit. This includes emails, names, phone numbers, IP addresses, physical
+  addresses, government IDs, payment data, access tokens, API keys, passwords,
+  and session identifiers — whether found in code, logs, fixtures, or seed data.
+- **Reference location and field *type* only.** Say what kind of data leaks and
+  where, not its value. For example write `user_email = <redacted email>` or
+  "logs the customer's phone number at `auth.ts:42`" — never the actual string.
+- **Do not open or quote the contents of likely-secret files** (`.env*`,
+  credential stores, key files, database dumps, PII-laden fixtures/seed data).
+  Report their presence and risk **by path only**; do not read their values into
+  the transcript.
+- If quoting a code line is necessary to explain a finding, **mask the data
+  portion** before including it. When in doubt, redact.
+
+These rules apply to every artifact this tool produces, including the fix-stage
+PR description and commit messages.
+
 ## Review Checklist
 
 ### PII in Logs & Error Reports
