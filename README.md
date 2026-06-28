@@ -121,7 +121,14 @@ WORKFLOWS="${WORKFLOWS:-ci.yml checks.yml test.yml}"
 
 ### Slack Notifications
 
-The `notify` job in `codebase-review.yml` prints a warning by default. To get Slack alerts on failure:
+> **Important:** The `notify` job ships as a **stub** — out of the box it only
+> writes a log line, which nobody sees for a once-a-week cron. **Adopters MUST
+> replace this stub** with a real channel (Slack/Teams/email/PagerDuty),
+> otherwise a failed weekly run is effectively invisible. At minimum, make the
+> step `exit 1` so the run shows red and GitHub's built-in failed-workflow
+> email reaches repo watchers.
+
+The `notify` job in `codebase-review.yml` only logs by default. To get Slack alerts on failure:
 
 1. Add `SLACK_WEBHOOK_URL` to your repo secrets
 2. Replace the notify step with:
