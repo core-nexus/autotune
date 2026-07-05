@@ -1,0 +1,206 @@
+diff --git a/.github/workflows/claude-pr-review.yml b/.github/workflows/claude-pr-review.yml
+index ed8bdcc..512b593 100644
+--- a/.github/workflows/claude-pr-review.yml
++++ b/.github/workflows/claude-pr-review.yml
+@@ -2,6 +2,19 @@ name: Claude PR Review
+ 
+ # Two-stage pipeline: review → fix (if needed).
+ # Triggers: PR events (auto), /claude-review (manual review), /claude-fix (manual fix).
++#
++# SECURITY NOTE — untrusted input flows into an autonomous agent.
++# The review/fix jobs read PR diffs and PR/issue comments, which are
++# attacker-influenceable on public repos, and run Claude with a scoped
++# OAuth token (and, for the fix job, `contents: write`). That content is a
++# prompt-injection channel. Two guardrails keep the blast radius small:
++#   1. The `issue_comment` command triggers below are gated on
++#      `author_association` so only OWNER/MEMBER/COLLABORATOR can invoke
++#      `/claude-review` and `/claude-fix` (see each job's `if:`).
++#   2. This workflow declares a deny-all `permissions:` floor and each job
++#      grants only the scopes it needs (least privilege).
++# Install this workflow only on repos where you trust the maintainers who
++# can run these commands.
+ 
+ on:
+   pull_request:
+@@ -11,6 +24,9 @@ on:
+   issue_comment:
+     types: [created]
+ 
++# Deny-all floor; each job re-grants only the scopes it needs.
++permissions: {}
++
+ concurrency:
+   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+@@ -18,10 +34,11 @@ concurrency:
+ jobs:
+   # ─── Stage 1: Review ───────────────────────────────────────────────────────
+   review:
+-    # Run on PR events (not dependabot), or on "/claude-review" comments on PRs
++    # Run on PR events (not dependabot), or on "/claude-review" comments posted
++    # by a repo owner/member/collaborator (privileged trigger — see SECURITY NOTE).
+     if: |
+       (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
+-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review'))
++      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/claude-review'))
+     runs-on: ubuntu-latest
+     timeout-minutes: 30
+     permissions:
+@@ -33,13 +50,13 @@ jobs:
+       follow_up: ${{ steps.check-followup.outputs.priority }}
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+         with:
+           fetch-depth: 1
+ 
+       - name: PR Review
+         id: review
+-        uses: anthropics/claude-code-action@v1
++        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           track_progress: true
+@@ -136,10 +153,11 @@ jobs:
+   fix-review-issues:
+     needs: review
+     # Run after review if priority is LOW/MEDIUM/HIGH, or directly on "/claude-fix"
++    # posted by a repo owner/member/collaborator (privileged trigger — see SECURITY NOTE).
+     if: |
+       always() && (
+         (needs.review.result == 'success' && (needs.review.outputs.follow_up == 'HIGH' || needs.review.outputs.follow_up == 'MEDIUM' || needs.review.outputs.follow_up == 'LOW')) ||
+-        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix'))
++        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/claude-fix'))
+       )
+     runs-on: ubuntu-latest
+     timeout-minutes: 120
+@@ -151,12 +169,12 @@ jobs:
+       actions: read
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+         with:
+           fetch-depth: 1
+ 
+       - name: Fix review issues
+-        uses: anthropics/claude-code-action@v1
++        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           track_progress: true
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..81e8dc5 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -36,15 +36,20 @@ concurrency:
+   group: codebase-review-${{ inputs.review_area || github.run_id }}
+   cancel-in-progress: false
+ 
++# Deny-all floor; each job re-grants only the scopes it needs (least privilege).
++permissions: {}
++
+ jobs:
+   # ─── Determine which review area(s) to run ─────────────────────────────────
+   determine-area:
+     runs-on: ubuntu-latest
++    permissions:
++      contents: read
+     outputs:
+       areas_json: ${{ steps.resolve.outputs.areas_json }}
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+ 
+       - name: Resolve review area from schedule or input
+         id: resolve
+@@ -72,13 +77,13 @@ jobs:
+       priority: ${{ steps.extract-priority.outputs.priority }}
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+         with:
+           fetch-depth: 1
+ 
+       - name: Review codebase — ${{ matrix.area }}
+         id: review
+-        uses: anthropics/claude-code-action@v1
++        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: >-
+@@ -194,12 +199,12 @@ jobs:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@v4
++        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Fix review findings — ${{ matrix.area }}
+-        uses: anthropics/claude-code-action@v1
++        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: >-
+@@ -298,13 +303,14 @@ jobs:
+     needs: [review, fix]
+     if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
+     runs-on: ubuntu-latest
++    permissions: {}
+     steps:
+       - name: Notify on failure
+         run: |
+           echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
+           echo ""
+           echo "To add Slack notifications, replace this step with:"
+-          echo "  uses: slackapi/slack-github-action@v3.0.1"
++          echo "  uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1"
+           echo "  with:"
+           echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+           echo "    webhook-type: incoming-webhook"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..a595e52 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -28,11 +28,16 @@ fi
+ # Method 2 (fallback): list recent issues via REST API
+ if [[ -z "${PRIORITY}" ]]; then
+   echo "Falling back to gh issue list..."
++  # Pass REVIEW_AREA to jq as a named argument (--arg) rather than interpolating
++  # it into the jq program text, so the value can never be parsed as jq syntax.
++  # (`gh --jq` does not accept `--arg`, so pipe the raw JSON to jq instead.)
+   BODY=$(gh issue list \
+     --repo "${REPO}" \
+     --state all --limit 10 \
+     --json title,body \
+-    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
++    2>/dev/null \
++    | jq -r --arg area "${REVIEW_AREA}" \
++        '[.[] | select(.title | startswith("review(" + $area + ")"))] | .[0].body // ""' \
+     2>/dev/null || true)
+   PRIORITY=$(echo "${BODY}" \
+     | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
+diff --git a/.github/workflows/scripts/resolve-review-area.sh b/.github/workflows/scripts/resolve-review-area.sh
+index 71631a5..8b51a95 100755
+--- a/.github/workflows/scripts/resolve-review-area.sh
++++ b/.github/workflows/scripts/resolve-review-area.sh
+@@ -19,6 +19,14 @@ if [[ "${EVENT_NAME}" = "workflow_dispatch" ]]; then
+   if [[ "${AREA}" = "all" ]]; then
+     echo "areas_json=${ALL_AREAS}" >> "${GITHUB_OUTPUT}"
+   else
++    # Validate AREA against the known list before writing it to GITHUB_OUTPUT.
++    # GitHub already constrains `choice` inputs, but validating here is
++    # defense-in-depth: it rejects any value (e.g. one containing a newline)
++    # that could inject additional workflow outputs.
++    if ! echo "${ALL_AREAS}" | jq -e --arg area "${AREA}" 'index($area) != null' >/dev/null; then
++      echo "::error::Invalid review area: '${AREA}'. Must be one of ${ALL_AREAS} or 'all'." >&2
++      exit 1
++    fi
+     echo "areas_json=[\"${AREA}\"]" >> "${GITHUB_OUTPUT}"
+   fi
+ else
