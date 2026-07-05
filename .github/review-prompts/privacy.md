@@ -65,6 +65,16 @@ and protected throughout the codebase.
 - [ ] Session data, tokens, and temporary records have expiration
 - [ ] Log retention policies are appropriate for the data sensitivity
 
+## Reporting Rule — Do Not Amplify the Leak
+
+When a finding involves a concrete secret, credential, token, or real PII value
+discovered in the codebase, report it by **location and type only** (e.g.
+"customer email in fixture at `path:line`", "hardcoded API key at `path:line`").
+NEVER paste the literal value into an issue, comment, or PR body. Issues and PRs
+are visible to everyone with read access to the repo (the entire internet for
+public repos), so reproducing the value there widens the exposure and defeats
+the purpose of the review.
+
 ## Severity Guide
 
 - **CRITICAL**: PII in production logs, user data exposed to other users

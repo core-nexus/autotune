@@ -257,6 +257,30 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 - Adjust the schedule (biweekly instead of weekly)
 - Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
 
+## Data & Privacy
+
+This system works by sending your repository's contents to a third party for
+analysis. Before enabling it, understand the data flow:
+
+- **What is transmitted:** Both workflows invoke `anthropics/claude-code-action`,
+  which sends repository content — source files, diffs, and issue/PR text — to
+  **Anthropic's API** for processing. On the weekly codebase review this can be
+  the *entire repository*; on PR review it is the changed files plus PR context.
+- **Sensitive data warning:** If your repository contains unredacted sensitive
+  data — secrets or credentials committed to source, `.env`-style files, or test
+  fixtures with real customer records or PII — enabling these workflows ships
+  that content off-platform. Do not enable this system on such a repository
+  without first confirming your Anthropic data-processing terms cover it.
+- **Data-processing terms:** Review how Anthropic handles data submitted via the
+  API before enabling this in a repository with any sensitive content. See
+  Anthropic's [Commercial Terms of Service](https://www.anthropic.com/legal/commercial-terms)
+  and [Usage Policies](https://www.anthropic.com/legal/aup).
+- **Findings hygiene:** The review and fix prompts instruct the agent to refer to
+  any discovered secret or PII value **by location and type only** (e.g.
+  "hardcoded API key at `path:line`") and never to paste the literal value into a
+  GitHub issue, comment, or PR body — issues and PRs are visible to everyone with
+  read access to the repo (the entire internet, for public repos).
+
 ## License
 
 MIT

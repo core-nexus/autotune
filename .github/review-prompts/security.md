@@ -67,6 +67,16 @@ authorization, injection, secrets, and attack surface reduction.
 - [ ] Webhook handlers verify signatures (Stripe, etc.)
 - [ ] GraphQL/REST endpoints enforce query depth and complexity limits
 
+## Reporting Rule — Do Not Amplify the Leak
+
+When a finding involves a concrete secret, credential, token, or real PII value
+discovered in the codebase, report it by **location and type only** (e.g.
+"hardcoded API key at `path:line`", "AWS secret in config at `path:line`").
+NEVER paste the literal value into an issue, comment, or PR body. Issues and PRs
+are visible to everyone with read access to the repo (the entire internet for
+public repos), so reproducing a discovered secret there turns a contained leak
+into a broadcast one and defeats the purpose of the review.
+
 ## Severity Guide
 
 - **CRITICAL**: Auth bypass, data exposure, secret leak, injection vulnerability
