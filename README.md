@@ -239,6 +239,7 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 │   ├── documentation.md
 │   ├── dependency-health.md
 │   └── e-commerce.md
+├── ci.yml.template             # Lint + test gate — move to workflows/ to enable
 └── workflows/
     ├── codebase-review.yml      # Weekly deep-dive reviews
     ├── claude-pr-review.yml     # PR-level reviews
@@ -247,7 +248,47 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
         ├── extract-review-priority.sh
         ├── extract-pr-review-priority.sh
         └── trigger-ci-workflows.sh
+tests/                          # Bats suite mirroring scripts/ (see Development)
+├── helpers.bash
+├── resolve-review-area.bats
+├── extract-review-priority.bats
+├── extract-pr-review-priority.bats
+├── trigger-ci-workflows.bats
+├── areas-sync.bats
+└── fixtures/
 ```
+
+## Development / Testing
+
+The executable logic in this repo is four Bash scripts under
+`.github/workflows/scripts/`. They are covered by a [Bats](https://bats-core.readthedocs.io/)
+suite in `tests/`, which mirrors the script layout.
+
+**Testing conventions:**
+
+- One `.bats` file per script (plus `areas-sync.bats` guarding the
+  duplicated review-area list against drift).
+- Tests exercise the **real** scripts. The only mocked boundary is the `gh`
+  CLI, stubbed by placing an executable named `gh` earlier on `PATH`
+  (see `write_gh` in `tests/helpers.bash`) — no internal logic is mocked.
+- Deterministic fixtures for parsing logic live in `tests/fixtures/`.
+
+**Run the checks locally:**
+
+```bash
+# Test suite
+bats tests/
+
+# Lint (matches the CI gate)
+shellcheck .github/workflows/scripts/*.sh
+actionlint .github/workflows/*.yml
+```
+
+A ready-to-use CI workflow that runs all three (`shellcheck`, `actionlint`,
+`bats`) on every push and pull request is provided at
+[`.github/ci.yml.template`](.github/ci.yml.template). Move it to
+`.github/workflows/ci.yml` to enable the gate. (It ships as a `.template`
+because the automated-fix bot's token cannot write into `.github/workflows/`.)
 
 ## Cost Considerations
 

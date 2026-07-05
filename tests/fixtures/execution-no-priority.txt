@@ -1,0 +1,4 @@
+The review completed but the agent never emitted a priority sentinel.
+
+This transcript contains no MAXIMUM underscore FIX underscore PRIORITY marker
+in the machine-readable form the extractor greps for.

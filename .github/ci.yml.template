@@ -1,0 +1,54 @@
+name: CI
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPLATE — move this file to `.github/workflows/ci.yml` to activate it.
+# It is shipped here (not under .github/workflows/) because the automated-fix
+# GitHub App token lacks the `workflows` permission and cannot push files into
+# .github/workflows/. A maintainer (or a token with `workflows` scope) must
+# install it. Once moved, no content changes are required.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Quality gate for this repository's own executable logic.
+#
+# The repo ships four Bash scripts plus two GitHub Actions workflows that drive
+# the entire review-and-fix pipeline. This workflow gives them a real gate so a
+# regression (bad regex, YAML typo, wrong variable) is caught on PR instead of
+# during a live scheduled run. It also gives the fix-stage prompts an actual
+# "lint / test" target to satisfy, and is dispatchable so trigger-ci-workflows.sh
+# has a real ci.yml to trigger.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck (scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on workflow scripts
+        run: shellcheck .github/workflows/scripts/*.sh
+
+  actionlint:
+    name: Actionlint (workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint GitHub Actions workflows
+        uses: raven-actions/actionlint@v2
+
+  bats:
+    name: Bats (test suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run the Bats test suite
+        run: bats tests/

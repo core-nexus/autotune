@@ -79,6 +79,27 @@ Identify and flag gaps in any of these:
 - [ ] Concurrent operation tests (race conditions?)
 - [ ] Data migration/schema change tests
 
+## Shell / Infrastructure Repos
+
+The checklist above assumes a JS/TS (Vitest/Jest) stack. For repos whose only
+executable logic is Bash scripts or CI workflows (like this one), apply the same
+principles with shell-appropriate tooling:
+
+- **Test runner**: Use [Bats](https://bats-core.readthedocs.io/) (`bats-core`).
+  Put tests under `tests/` mirroring the script layout, one `.bats` per script.
+- **Boundary-only mocking**: The same "only mock external boundaries" rule
+  applies. For shell, stub external CLIs (`gh`, `curl`, `aws`) by placing an
+  executable of that name earlier on `PATH`. Never edit or replace the script's
+  own internal logic — exercise the real script end to end.
+- **Exit-code assertions**: Assert on `status` (exit code), on `stdout`/`stderr`
+  content (`output`), and on files the script writes (e.g. `GITHUB_OUTPUT`).
+  Verify the failure paths too: `set -euo pipefail` and `${VAR:?}` guards should
+  produce non-zero exits on missing inputs.
+- **Config drift**: Where a value is duplicated across scripts, workflow YAML,
+  and docs, add a test asserting the copies stay in sync.
+- **CI gate**: Lint with `shellcheck` (scripts) and `actionlint` (workflows) in
+  addition to running the Bats suite.
+
 ## Severity Guide
 
 - **CRITICAL**: Internal code being mocked, auth functions untested
