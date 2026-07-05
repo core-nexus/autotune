@@ -1,0 +1,518 @@
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..0b7f9b8 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -172,13 +172,31 @@ jobs:
+           REPO: ${{ github.repository }}
+         run: .github/workflows/scripts/extract-review-priority.sh
+ 
++      # Persist this leg's priority as a per-area artifact. GitHub Actions does
++      # NOT aggregate matrix-leg outputs, so a shared `needs.review.outputs.*`
++      # scalar would resolve to whichever leg wrote last (nondeterministic) and
++      # could silently drop a real MEDIUM/HIGH result. Each fix leg reads back
++      # its own area's value instead.
++      - name: Persist priority for this area
++        run: |
++          mkdir -p priority-out
++          printf '%s' "${{ steps.extract-priority.outputs.priority }}" > "priority-out/${{ matrix.area }}"
++
++      - name: Upload priority artifact
++        uses: actions/upload-artifact@v4
++        with:
++          name: review-priority-${{ matrix.area }}
++          path: priority-out/${{ matrix.area }}
++          if-no-files-found: error
++          retention-days: 1
++
+   # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+   fix:
+     needs: [determine-area, review]
+-    if: |
+-      always() &&
+-      needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
++    # Run the fix job whenever the review stage succeeded, then gate each matrix
++    # leg on ITS OWN area's priority (read from the per-area artifact below).
++    # This avoids depending on a shared, nondeterministic matrix output.
++    if: always() && needs.review.result == 'success'
+     runs-on: ubuntu-latest
+     timeout-minutes: 90
+     permissions:
+@@ -198,7 +216,36 @@ jobs:
+         with:
+           fetch-depth: 0
+ 
++      # Read back this area's own priority (see the review job's artifact upload).
++      - name: Download this area's review priority
++        uses: actions/download-artifact@v4
++        continue-on-error: true
++        with:
++          name: review-priority-${{ matrix.area }}
++          path: priority-in
++
++      - name: Decide whether to fix this area
++        id: gate
++        run: |
++          PRIORITY=$(cat "priority-in/${{ matrix.area }}" 2>/dev/null || echo "")
++          PRIORITY="${PRIORITY:-UNKNOWN}"
++          echo "Resolved priority for ${{ matrix.area }}: ${PRIORITY}"
++          echo "priority=${PRIORITY}" >> "$GITHUB_OUTPUT"
++          if [[ "${PRIORITY}" == "HIGH" || "${PRIORITY}" == "MEDIUM" ]]; then
++            echo "should_fix=true" >> "$GITHUB_OUTPUT"
++          else
++            echo "should_fix=false" >> "$GITHUB_OUTPUT"
++            if [[ "${PRIORITY}" == "UNKNOWN" ]]; then
++              # UNKNOWN means priority extraction hit a real failure — make it
++              # visible instead of quietly treating it like a clean NONE.
++              echo "::warning::Could not resolve priority for ${{ matrix.area }}; skipping fix. Check the review job's priority-extraction step."
++            else
++              echo "No automated fix for ${{ matrix.area }} (priority=${PRIORITY})."
++            fi
++          fi
++
+       - name: Fix review findings — ${{ matrix.area }}
++        if: steps.gate.outputs.should_fix == 'true'
+         uses: anthropics/claude-code-action@v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+@@ -211,7 +258,7 @@ jobs:
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ steps.gate.outputs.priority }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+@@ -285,26 +332,42 @@ jobs:
+ 
+       # Trigger CI on the new PR branch (customize workflow names for your project)
+       - name: Trigger CI workflows
+-        if: success()
++        if: success() && steps.gate.outputs.should_fix == 'true'
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+         run: |
+-          export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
++          export BRANCH
+           .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
+   notify:
+-    needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    # Include determine-area: if that first job fails, review and fix are
++    # SKIPPED (not "failure"), so omitting it would leave a total pipeline
++    # failure completely silent.
++    needs: [determine-area, review, fix]
++    if: |
++      always() && github.event_name != 'pull_request' && (
++        needs.determine-area.result == 'failure' ||
++        needs.review.result == 'failure' ||
++        needs.fix.result == 'failure'
++      )
+     runs-on: ubuntu-latest
++    permissions:
++      issues: write
+     steps:
++      # Open (or update) a durable tracking issue rather than emitting only a
++      # workflow annotation nobody watches on an unattended weekly cron.
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
+       - name: Notify on failure
+-        run: |
+-          echo "::warning::Codebase review workflow failed. Review: ${{ needs.review.result }}, Fix: ${{ needs.fix.result }}"
+-          echo ""
+-          echo "To add Slack notifications, replace this step with:"
+-          echo "  uses: slackapi/slack-github-action@v3.0.1"
+-          echo "  with:"
+-          echo "    webhook: \${{ secrets.SLACK_WEBHOOK_URL }}"
+-          echo "    webhook-type: incoming-webhook"
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPO: ${{ github.repository }}
++          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++          DETERMINE_RESULT: ${{ needs.determine-area.result }}
++          REVIEW_RESULT: ${{ needs.review.result }}
++          FIX_RESULT: ${{ needs.fix.result }}
++        run: .github/workflows/scripts/notify-review-failure.sh
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..9763adb 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -8,12 +8,31 @@ set -euo pipefail
+ #   GH_TOKEN
+ #   REPO - GitHub repository (owner/repo)
+ #   PR_NUMBER - the PR number
++#
++# Priority resolution distinguishes three outcomes so a genuine API failure is
++# never silently reported as "no priority":
++#   <VALUE>  - a MAXIMUM_FIX_PRIORITY marker was found in a comment
++#   NONE     - the API call succeeded but no marker was present
++#   UNKNOWN  - the `gh api` call itself failed (auth, rate limit, network, ...)
+ 
+ : "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR_NUMBER:?}"
+ 
+-PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+-  --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
+-  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
++# Capture the gh exit status separately from the grep match. Routing stderr to a
++# file (instead of /dev/null) keeps the real error visible in the step log.
++ERR_FILE=$(mktemp)
++if COMMENTS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
++      --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' \
++      2>"${ERR_FILE}"); then
++  PRIORITY=$(printf '%s' "${COMMENTS}" \
++    | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || true)
++  # Call succeeded but no marker present -> a legitimate NONE.
++  PRIORITY="${PRIORITY:-NONE}"
++else
++  echo "::warning::gh api failed while reading PR ${PR_NUMBER} comments; reporting priority=UNKNOWN" >&2
++  cat "${ERR_FILE}" >&2 || true
++  PRIORITY="UNKNOWN"
++fi
++rm -f "${ERR_FILE}"
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..cdbeaa2 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -11,6 +11,13 @@ set -euo pipefail
+ #
+ # Optional env vars:
+ #   EXECUTION_FILE - path to the claude-code-action execution file
++#
++# The resolved priority is one of:
++#   <VALUE>  - a MAXIMUM_FIX_PRIORITY marker was found
++#   NONE     - a source was read successfully but contained no marker
++#   UNKNOWN  - the API fallback itself failed (auth, rate limit, network, ...)
++# UNKNOWN is emitted instead of NONE so a transient API failure cannot silently
++# skip the fix stage while looking like a clean review.
+ 
+ : "${GITHUB_OUTPUT:?}" "${REVIEW_AREA:?}" "${REPO:?}"
+ 
+@@ -25,20 +32,31 @@ else
+   echo "No execution file found at: ${EXECUTION_FILE:-<unset>}"
+ fi
+ 
+-# Method 2 (fallback): list recent issues via REST API
++# Method 2 (fallback): list recent issues via REST API.
++# Capture gh's exit status separately from the grep match so a genuine API
++# failure is not collapsed into "no priority found" (which would silently skip
++# the fix stage). stderr is preserved in the log rather than discarded.
+ if [[ -z "${PRIORITY}" ]]; then
+   echo "Falling back to gh issue list..."
+-  BODY=$(gh issue list \
+-    --repo "${REPO}" \
+-    --state all --limit 10 \
+-    --json title,body \
+-    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
+-    2>/dev/null || true)
+-  PRIORITY=$(echo "${BODY}" \
+-    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
+-  echo "Extracted from issue list: ${PRIORITY:-<empty>}"
++  ERR_FILE=$(mktemp)
++  if BODY=$(gh issue list \
++        --repo "${REPO}" \
++        --state all --limit 10 \
++        --json title,body \
++        --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
++        2>"${ERR_FILE}"); then
++    PRIORITY=$(printf '%s' "${BODY}" \
++      | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
++    # Read succeeded but no marker present -> a legitimate NONE.
++    PRIORITY="${PRIORITY:-NONE}"
++    echo "Extracted from issue list: ${PRIORITY}"
++  else
++    echo "::warning::gh issue list failed for ${REPO} (area ${REVIEW_AREA}); reporting priority=UNKNOWN" >&2
++    cat "${ERR_FILE}" >&2 || true
++    PRIORITY="UNKNOWN"
++  fi
++  rm -f "${ERR_FILE}"
+ fi
+ 
+-PRIORITY="${PRIORITY:-NONE}"
+ echo "MAXIMUM_FIX_PRIORITY for ${REVIEW_AREA}: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+diff --git a/.github/workflows/scripts/notify-review-failure.sh b/.github/workflows/scripts/notify-review-failure.sh
+new file mode 100755
+index 0000000..3beec2d
+--- /dev/null
++++ b/.github/workflows/scripts/notify-review-failure.sh
+@@ -0,0 +1,70 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Emit a durable failure signal when the scheduled codebase-review workflow
++# fails. A workflow annotation alone is not a notification for a job that runs
++# unattended every week, so this opens (or updates) a tracking issue that
++# persists until a human closes it.
++#
++# Required env vars:
++#   GH_TOKEN
++#   REPO    - GitHub repository (owner/repo)
++#   RUN_URL - URL of the failed workflow run
++#
++# Optional env vars (per-job results, for context in the alert):
++#   DETERMINE_RESULT
++#   REVIEW_RESULT
++#   FIX_RESULT
++
++: "${GH_TOKEN:?}" "${REPO:?}" "${RUN_URL:?}"
++
++DETERMINE_RESULT="${DETERMINE_RESULT:-unknown}"
++REVIEW_RESULT="${REVIEW_RESULT:-unknown}"
++FIX_RESULT="${FIX_RESULT:-unknown}"
++
++echo "::warning::Codebase review workflow failed (determine-area=${DETERMINE_RESULT}, review=${REVIEW_RESULT}, fix=${FIX_RESULT}). See ${RUN_URL}"
++
++FAIL_LABEL="auto-review-failure"
++TITLE="Automated codebase review workflow failed"
++SUMMARY="determine-area=${DETERMINE_RESULT}, review=${REVIEW_RESULT}, fix=${FIX_RESULT}"
++
++read -r -d '' BODY <<EOF || true
++The scheduled **Automated Codebase Review** workflow failed.
++
++| Job | Result |
++| --- | --- |
++| determine-area | ${DETERMINE_RESULT} |
++| review | ${REVIEW_RESULT} |
++| fix | ${FIX_RESULT} |
++
++Failed run: ${RUN_URL}
++
++This issue was opened automatically because the weekly review runs unattended
++and its failures would otherwise be invisible in the run logs. Investigate the
++run above, then close this issue once resolved.
++
++To route these alerts to Slack/email instead, replace the notify step's script
++with your alerting action (e.g. slackapi/slack-github-action).
++EOF
++
++# Ensure the tracking label exists (idempotent).
++gh label create "${FAIL_LABEL}" --repo "${REPO}" \
++  --color B60205 --description "Automated review workflow failures" 2>/dev/null || true
++
++# De-duplicate: if an open failure issue already exists, comment on it instead
++# of opening a new one so repeated failures do not spam the tracker.
++EXISTING=$(gh issue list --repo "${REPO}" --state open \
++  --label "${FAIL_LABEL}" --search "${TITLE} in:title" \
++  --json number --jq '.[0].number' 2>/dev/null || true)
++
++if [[ -n "${EXISTING}" ]]; then
++  echo "Existing failure issue ${EXISTING} found; adding a comment."
++  gh issue comment "${EXISTING}" --repo "${REPO}" \
++    --body "Workflow failed again (${SUMMARY}). Failed run: ${RUN_URL}"
++else
++  echo "Opening a new failure tracking issue."
++  gh issue create --repo "${REPO}" \
++    --title "${TITLE}" \
++    --label "${FAIL_LABEL}" \
++    --body "${BODY}"
++fi
+diff --git a/.github/workflows/scripts/tests/test-extract-priority.sh b/.github/workflows/scripts/tests/test-extract-priority.sh
+new file mode 100755
+index 0000000..d8b4890
+--- /dev/null
++++ b/.github/workflows/scripts/tests/test-extract-priority.sh
+@@ -0,0 +1,88 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Self-contained tests for the priority-extraction scripts.
++#
++# These verify the core error-handling guarantee: a genuine `gh` failure must
++# resolve to UNKNOWN, never to NONE (which would silently skip the fix stage),
++# while a successful call with no marker still resolves to NONE.
++#
++# `gh` is stubbed via a temporary PATH entry whose behaviour is controlled by
++# the GH_STUB_MODE env var, so no network or auth is required.
++#
++# Usage: .github/workflows/scripts/tests/test-extract-priority.sh
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++PR_SCRIPT="${SCRIPT_DIR}/extract-pr-review-priority.sh"
++AREA_SCRIPT="${SCRIPT_DIR}/extract-review-priority.sh"
++
++WORKDIR="$(mktemp -d)"
++trap 'rm -rf "${WORKDIR}"' EXIT
++
++# ── Build a stub `gh` on PATH ───────────────────────────────────────────────
++STUB_BIN="${WORKDIR}/bin"
++mkdir -p "${STUB_BIN}"
++cat > "${STUB_BIN}/gh" <<'STUB'
++#!/usr/bin/env bash
++# Stub gh. GH_STUB_MODE selects behaviour:
++#   marker-high : succeed, output a body containing MAXIMUM_FIX_PRIORITY:HIGH
++#   no-marker   : succeed, output a body with no marker
++#   fail        : print an error to stderr and exit non-zero (API failure)
++case "${GH_STUB_MODE:-}" in
++  marker-high) echo "some text MAXIMUM_FIX_PRIORITY:HIGH more text"; exit 0 ;;
++  no-marker)   echo "a normal review with no marker"; exit 0 ;;
++  fail)        echo "gh: HTTP 401: Bad credentials" >&2; exit 1 ;;
++  *)           echo "gh stub: unset GH_STUB_MODE" >&2; exit 99 ;;
++esac
++STUB
++chmod +x "${STUB_BIN}/gh"
++export PATH="${STUB_BIN}:${PATH}"
++
++PASS=0
++FAIL=0
++
++# run_case <label> <script> <expected-priority>
++# Remaining env (GH_STUB_MODE, EXECUTION_FILE, ...) is inherited from the caller.
++run_case() {
++  local label="$1" script="$2" expected="$3"
++  local out_file="${WORKDIR}/out.$$"
++  : > "${out_file}"
++  GITHUB_OUTPUT="${out_file}" bash "${script}" >/dev/null 2>&1 || true
++  local actual
++  actual="$(grep -oP '(?<=^priority=).*' "${out_file}" | tail -1 || true)"
++  if [[ "${actual}" == "${expected}" ]]; then
++    echo "PASS: ${label} (priority=${actual})"
++    PASS=$((PASS + 1))
++  else
++    echo "FAIL: ${label} — expected '${expected}', got '${actual}'"
++    FAIL=$((FAIL + 1))
++  fi
++}
++
++echo "== extract-pr-review-priority.sh =="
++REPO="o/r" PR_NUMBER="1" GH_STUB_MODE="marker-high" \
++  run_case "PR: marker present -> HIGH" "${PR_SCRIPT}" "HIGH"
++REPO="o/r" PR_NUMBER="1" GH_STUB_MODE="no-marker" \
++  run_case "PR: success, no marker -> NONE" "${PR_SCRIPT}" "NONE"
++REPO="o/r" PR_NUMBER="1" GH_STUB_MODE="fail" \
++  run_case "PR: api failure -> UNKNOWN (not NONE)" "${PR_SCRIPT}" "UNKNOWN"
++
++echo "== extract-review-priority.sh =="
++# Execution-file path wins and never calls gh.
++EXEC_HIGH="${WORKDIR}/exec-high.txt"
++printf 'blah\nMAXIMUM_FIX_PRIORITY:MEDIUM\n' > "${EXEC_HIGH}"
++REPO="o/r" REVIEW_AREA="error-handling" EXECUTION_FILE="${EXEC_HIGH}" GH_STUB_MODE="fail" \
++  run_case "area: execution file -> MEDIUM (gh not consulted)" "${AREA_SCRIPT}" "MEDIUM"
++# Fallback to gh, marker present.
++REPO="o/r" REVIEW_AREA="error-handling" GH_STUB_MODE="marker-high" \
++  run_case "area: gh fallback marker -> HIGH" "${AREA_SCRIPT}" "HIGH"
++# Fallback to gh, success but no matching issue/body.
++REPO="o/r" REVIEW_AREA="error-handling" GH_STUB_MODE="no-marker" \
++  run_case "area: gh fallback no marker -> NONE" "${AREA_SCRIPT}" "NONE"
++# Fallback to gh, API failure -> UNKNOWN, not NONE.
++REPO="o/r" REVIEW_AREA="error-handling" GH_STUB_MODE="fail" \
++  run_case "area: gh fallback failure -> UNKNOWN (not NONE)" "${AREA_SCRIPT}" "UNKNOWN"
++
++echo ""
++echo "Results: ${PASS} passed, ${FAIL} failed"
++[[ "${FAIL}" -eq 0 ]]
+diff --git a/.github/workflows/scripts/tests/test-trigger-ci.sh b/.github/workflows/scripts/tests/test-trigger-ci.sh
+new file mode 100755
+index 0000000..b3ea6aa
+--- /dev/null
++++ b/.github/workflows/scripts/tests/test-trigger-ci.sh
+@@ -0,0 +1,60 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Tests for trigger-ci-workflows.sh error classification.
++#
++# Verifies that a genuine dispatch failure (bad token, permissions, network) is
++# reported as a real error and fails the step, while a "not found" workflow is
++# treated as a benign skip — the mislabeling this fixes.
++#
++# `gh` is stubbed via PATH; GH_STUB_MODE controls its behaviour.
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++TRIGGER_SCRIPT="${SCRIPT_DIR}/trigger-ci-workflows.sh"
++
++WORKDIR="$(mktemp -d)"
++trap 'rm -rf "${WORKDIR}"' EXIT
++
++STUB_BIN="${WORKDIR}/bin"
++mkdir -p "${STUB_BIN}"
++cat > "${STUB_BIN}/gh" <<'STUB'
++#!/usr/bin/env bash
++# Stub `gh workflow run ...`. GH_STUB_MODE selects behaviour:
++#   ok        : succeed
++#   not-found : fail with a "could not find" message (benign skip)
++#   forbidden : fail with a permissions error (real error)
++case "${GH_STUB_MODE:-}" in
++  ok)        exit 0 ;;
++  not-found) echo "could not find any workflows named ci.yml" >&2; exit 1 ;;
++  forbidden) echo "HTTP 403: Resource not accessible by integration" >&2; exit 1 ;;
++  *)         echo "gh stub: unset GH_STUB_MODE" >&2; exit 99 ;;
++esac
++STUB
++chmod +x "${STUB_BIN}/gh"
++export PATH="${STUB_BIN}:${PATH}"
++
++PASS=0
++FAIL=0
++
++# run_case <label> <expected-exit>
++run_case() {
++  local label="$1" expected_exit="$2"
++  local rc=0
++  REPO="o/r" BRANCH="review/x" WORKFLOWS="ci.yml" \
++    bash "${TRIGGER_SCRIPT}" >/dev/null 2>&1 || rc=$?
++  if [[ "${rc}" -eq "${expected_exit}" ]]; then
++    echo "PASS: ${label} (exit=${rc})"
++    PASS=$((PASS + 1))
++  else
++    echo "FAIL: ${label} — expected exit ${expected_exit}, got ${rc}"
++    FAIL=$((FAIL + 1))
++  fi
++}
++
++GH_STUB_MODE="ok"        run_case "successful dispatch -> exit 0" 0
++GH_STUB_MODE="not-found" run_case "not-found -> benign skip, exit 0" 0
++GH_STUB_MODE="forbidden" run_case "permissions error -> real error, exit 1" 1
++
++echo ""
++echo "Results: ${PASS} passed, ${FAIL} failed"
++[[ "${FAIL}" -eq 0 ]]
+diff --git a/.github/workflows/scripts/trigger-ci-workflows.sh b/.github/workflows/scripts/trigger-ci-workflows.sh
+index 0bb1846..a51753c 100755
+--- a/.github/workflows/scripts/trigger-ci-workflows.sh
++++ b/.github/workflows/scripts/trigger-ci-workflows.sh
+@@ -20,8 +20,34 @@ set -euo pipefail
+ WORKFLOWS="${WORKFLOWS:-ci.yml checks.yml test.yml}"
+ 
+ echo "Triggering CI workflows on branch: ${BRANCH}"
++
++# Track whether any workflow failed for a reason other than "does not exist" so
++# the step can surface a real problem instead of silently succeeding.
++had_real_error=0
++
+ for workflow in ${WORKFLOWS}; do
+   echo "  -> ${workflow}"
+-  gh workflow run "${workflow}" --ref "${BRANCH}" --repo "${REPO}" 2>/dev/null \
+-    || echo "  Skipped: ${workflow} (not found or not dispatchable)"
++
++  # Capture stderr so a genuine error (bad token, missing permissions, network
++  # failure, invalid branch) is diagnosable and not mislabeled as "not found".
++  err_file=$(mktemp)
++  if gh workflow run "${workflow}" --ref "${BRANCH}" --repo "${REPO}" 2>"${err_file}"; then
++    echo "     Dispatched: ${workflow}"
++  else
++    err_msg=$(cat "${err_file}")
++    # A non-existent / non-dispatchable workflow is an expected, benign skip.
++    if printf '%s' "${err_msg}" | grep -qiE 'could not find|not found|no workflow|does not have'; then
++      echo "     Skipped: ${workflow} (not found or not dispatchable)"
++    else
++      # Any other failure is real: report it distinctly and keep the details.
++      echo "::warning::Failed to dispatch ${workflow} on ${BRANCH}: ${err_msg}" >&2
++      had_real_error=1
++    fi
++  fi
++  rm -f "${err_file}"
+ done
++
++if [[ "${had_real_error}" -ne 0 ]]; then
++  echo "::error::One or more CI workflows failed to dispatch for a reason other than 'not found'." >&2
++  exit 1
++fi
