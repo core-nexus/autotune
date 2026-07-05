@@ -1,0 +1,29 @@
+version: 2
+
+# Keeps the CI supply chain current. GitHub Actions are this repo's only
+# dependency surface (no package manifest / lock file exists), so the
+# github-actions ecosystem is the one thing worth automating here.
+#
+# Dependabot's github-actions updater bumps both moving tags and pinned commit
+# SHAs and surfaces the upstream changelog, which is what keeps the SHA-pinned
+# `uses:` references in .github/workflows/ from silently drifting past upstream
+# security patches.
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "auto-review"
+      - "dependencies"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -128,7 +128,7 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
 
 ```yaml
 - name: Notify Slack on failure
-  uses: slackapi/slack-github-action@v3.0.1
+  uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c  # v3.0.3
   with:
     webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
     webhook-type: incoming-webhook
