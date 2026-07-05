@@ -32,6 +32,18 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
 
+## Data Handling
+
+Both workflows use [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action), which **sends repository content — source code, comments, and test fixtures — to Anthropic's API** for processing. That content leaves your repository and is transmitted to a third-party sub-processor, which may involve an international data transfer (e.g. GDPR Art. 44–49).
+
+Before installing this system, be aware:
+
+- **Do not run it on repositories that contain unmasked personal data** (real PII in code comments, test fixtures, or sample data) unless you have an appropriate legal basis and transfer mechanism in place.
+- If your organization is subject to GDPR/CCPA and your code could contain personal data, ensure an appropriate **Data Processing Agreement (DPA)** and transfer mechanism (e.g. SCCs) with Anthropic are in place first.
+- Review Anthropic's [commercial terms and data usage policy](https://www.anthropic.com/legal/commercial-terms) and the [Claude Code data usage documentation](https://docs.anthropic.com/en/docs/claude-code/data-usage) to understand how your content is handled and retained.
+
+This repository itself holds no personal data, so running the system on it triggers no such transfer — but downstream adopters should account for the above.
+
 ## Setup
 
 ### Prerequisites
