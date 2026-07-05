@@ -1,0 +1,291 @@
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..5739528 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -68,8 +68,6 @@ jobs:
+       max-parallel: 3
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+-    outputs:
+-      priority: ${{ steps.extract-priority.outputs.priority }}
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+@@ -172,13 +170,60 @@ jobs:
+           REPO: ${{ github.repository }}
+         run: .github/workflows/scripts/extract-review-priority.sh
+ 
+-  # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+-  fix:
++      # Persist this matrix leg's priority as a per-area artifact. A single
++      # job-level output cannot be used here: every matrix leg would write the
++      # same output key and overwrite each other, leaving one non-deterministic
++      # value. The collect-priorities job reads these artifacts to gate each
++      # area's fix leg on that area's OWN priority.
++      - name: Save per-area priority artifact
++        run: |
++          mkdir -p priority-out
++          printf '%s' "${PRIORITY}" > priority-out/priority.txt
++        env:
++          PRIORITY: ${{ steps.extract-priority.outputs.priority }}
++
++      - name: Upload per-area priority artifact
++        uses: actions/upload-artifact@v4
++        with:
++          name: priority-${{ matrix.area }}
++          path: priority-out/priority.txt
++          retention-days: 1
++          if-no-files-found: error
++
++  # ─── Collect per-area priorities → build the fix matrix ────────────────────
++  # Reads every priority-<area> artifact and emits a matrix `include` list
++  # containing only the areas whose OWN priority is HIGH or MEDIUM. This
++  # replaces the previous (buggy) gate on a single shared matrix output.
++  collect-priorities:
+     needs: [determine-area, review]
+-    if: |
+-      always() &&
+-      needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
++    if: always()
++    runs-on: ubuntu-latest
++    outputs:
++      has_fixes: ${{ steps.collect.outputs.has_fixes }}
++      matrix_include: ${{ steps.collect.outputs.matrix_include }}
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++        with:
++          fetch-depth: 1
++
++      - name: Download all priority artifacts
++        uses: actions/download-artifact@v4
++        continue-on-error: true
++        with:
++          pattern: priority-*
++          path: priorities
++
++      - name: Build fix matrix from per-area priorities
++        id: collect
++        env:
++          PRIORITIES_DIR: priorities
++        run: .github/workflows/scripts/collect-fix-areas.sh
++
++  # ─── Stage 2: Fix (only areas whose own priority is MEDIUM+) ───────────────
++  fix:
++    needs: [determine-area, collect-priorities]
++    if: needs.collect-priorities.outputs.has_fixes == 'true'
+     runs-on: ubuntu-latest
+     timeout-minutes: 90
+     permissions:
+@@ -190,8 +235,9 @@ jobs:
+     strategy:
+       fail-fast: false
+       max-parallel: 1
++      # One leg per area that needs fixing, each carrying its OWN priority.
+       matrix:
+-        area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
++        include: ${{ fromJson(needs.collect-priorities.outputs.matrix_include) }}
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+@@ -211,7 +257,7 @@ jobs:
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ matrix.priority }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+diff --git a/.github/workflows/scripts/collect-fix-areas.sh b/.github/workflows/scripts/collect-fix-areas.sh
+new file mode 100755
+index 0000000..8b5cee4
+--- /dev/null
++++ b/.github/workflows/scripts/collect-fix-areas.sh
+@@ -0,0 +1,61 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Build the fix-stage matrix from the per-area priority artifacts produced by
++# the review matrix.
++#
++# Each review matrix leg uploads an artifact named `priority-<area>` containing
++# a single file `priority.txt` with that area's MAXIMUM_FIX_PRIORITY value. This
++# script reads every downloaded artifact and emits a GitHub Actions matrix
++# `include` list holding only the areas whose OWN priority warrants a fix
++# (HIGH or MEDIUM).
++#
++# This deliberately replaces gating on a single job-level output: a matrix job
++# exposes one shared output key that every leg overwrites, so the surviving
++# value is whichever leg finished last — non-deterministic. Gating each fix leg
++# on its own artifact keeps every area's fix decision independent and correct.
++#
++# Required env vars:
++#   GITHUB_OUTPUT
++#
++# Optional env vars:
++#   PRIORITIES_DIR - directory holding the downloaded artifacts
++#                    (default: "priorities"). Layout:
++#                    ${PRIORITIES_DIR}/priority-<area>/priority.txt
++
++: "${GITHUB_OUTPUT:?}"
++
++PRIORITIES_DIR="${PRIORITIES_DIR:-priorities}"
++
++include='[]'
++
++if [[ -d "${PRIORITIES_DIR}" ]]; then
++  # Sort for deterministic ordering of the resulting matrix.
++  while IFS= read -r file; do
++    dir=$(dirname "${file}")
++    name=$(basename "${dir}")        # priority-<area>
++    area="${name#priority-}"
++    # Collapse any whitespace/newlines so a stray value can't corrupt the JSON.
++    priority=$(tr -d '[:space:]' < "${file}")
++
++    echo "  ${area}: ${priority:-<empty>}"
++
++    if [[ "${priority}" == "HIGH" || "${priority}" == "MEDIUM" ]]; then
++      include=$(printf '%s' "${include}" \
++        | jq -c --arg a "${area}" --arg p "${priority}" '. + [{area: $a, priority: $p}]')
++    fi
++  done < <(find "${PRIORITIES_DIR}" -mindepth 2 -name priority.txt | sort)
++else
++  echo "No priorities directory found at: ${PRIORITIES_DIR}"
++fi
++
++count=$(printf '%s' "${include}" | jq 'length')
++
++if [[ "${count}" -gt 0 ]]; then
++  echo "has_fixes=true" >> "${GITHUB_OUTPUT}"
++else
++  echo "has_fixes=false" >> "${GITHUB_OUTPUT}"
++fi
++
++echo "matrix_include=${include}" >> "${GITHUB_OUTPUT}"
++echo "Areas needing fixes (${count}): ${include}"
+diff --git a/.github/workflows/scripts/tests/test-collect-fix-areas.sh b/.github/workflows/scripts/tests/test-collect-fix-areas.sh
+new file mode 100755
+index 0000000..672fea4
+--- /dev/null
++++ b/.github/workflows/scripts/tests/test-collect-fix-areas.sh
+@@ -0,0 +1,118 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Regression test for collect-fix-areas.sh.
++#
++# Covers the correctness fix: the fix stage must gate each area on its OWN
++# priority, not on a single shared/overwritten matrix output. This test proves
++# that:
++#   - Only HIGH/MEDIUM areas end up in the matrix.
++#   - NONE/LOW/XLOW/empty areas are excluded (so clean areas don't get spurious
++#     fix PRs).
++#   - A MEDIUM area is still fixed even when another leg reports NONE (the exact
++#     scenario that the old single-output gate broke).
++#   - has_fixes reflects whether any area needs fixing.
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++COLLECT="${SCRIPT_DIR}/collect-fix-areas.sh"
++
++TMP_ROOT="$(mktemp -d)"
++trap 'rm -rf "${TMP_ROOT}"' EXIT
++
++failures=0
++
++# Populate ${dir}/priorities/priority-<area>/priority.txt from "area=priority"
++# pairs passed as arguments.
++setup_priorities() {
++  local base="$1"; shift
++  local pair area priority
++  for pair in "$@"; do
++    area="${pair%%=*}"
++    priority="${pair#*=}"
++    mkdir -p "${base}/priorities/priority-${area}"
++    printf '%s' "${priority}" > "${base}/priorities/priority-${area}/priority.txt"
++  done
++}
++
++# Run collect-fix-areas.sh against a fixture and capture its GITHUB_OUTPUT.
++run_collect() {
++  local base="$1"
++  local out="${base}/github_output"
++  : > "${out}"
++  GITHUB_OUTPUT="${out}" PRIORITIES_DIR="${base}/priorities" bash "${COLLECT}" >/dev/null
++  cat "${out}"
++}
++
++get_output() {
++  # get_output <github_output_contents> <key>
++  printf '%s\n' "$1" | grep -oP "(?<=^$2=).*" | tail -1
++}
++
++assert_eq() {
++  local desc="$1" expected="$2" actual="$3"
++  if [[ "${expected}" == "${actual}" ]]; then
++    echo "  PASS: ${desc}"
++  else
++    echo "  FAIL: ${desc}"
++    echo "        expected: ${expected}"
++    echo "        actual:   ${actual}"
++    failures=$((failures + 1))
++  fi
++}
++
++# ── Test 1: mixed priorities across a multi-area run ───────────────────────────
++echo "Test 1: mixed priorities — only HIGH/MEDIUM areas selected"
++d1="${TMP_ROOT}/t1"; mkdir -p "${d1}"
++setup_priorities "${d1}" \
++  correctness=MEDIUM security=HIGH documentation=NONE performance=LOW testing=XLOW
++out1="$(run_collect "${d1}")"
++has_fixes1="$(get_output "${out1}" has_fixes)"
++include1="$(get_output "${out1}" matrix_include)"
++assert_eq "has_fixes is true" "true" "${has_fixes1}"
++# Sorted by area name: correctness, security.
++areas1="$(printf '%s' "${include1}" | jq -c '[.[].area]')"
++assert_eq "only correctness+security selected" '["correctness","security"]' "${areas1}"
++corr_prio="$(printf '%s' "${include1}" | jq -r '.[] | select(.area=="correctness") | .priority')"
++assert_eq "correctness carries its own MEDIUM priority" "MEDIUM" "${corr_prio}"
++
++# ── Test 2: the regression — MEDIUM survives alongside a NONE leg ──────────────
++# Under the old single-output gate, a NONE leg finishing last would skip the
++# fix job entirely, dropping the real correctness=MEDIUM fix.
++echo "Test 2: MEDIUM area is still fixed when another area is NONE"
++d2="${TMP_ROOT}/t2"; mkdir -p "${d2}"
++setup_priorities "${d2}" correctness=MEDIUM documentation=NONE
++out2="$(run_collect "${d2}")"
++assert_eq "has_fixes is true" "true" "$(get_output "${out2}" has_fixes)"
++areas2="$(printf '%s' "$(get_output "${out2}" matrix_include)" | jq -c '[.[].area]')"
++assert_eq "only correctness selected (documentation excluded)" '["correctness"]' "${areas2}"
++
++# ── Test 3: all clean — no fix legs, no spurious PRs ──────────────────────────
++echo "Test 3: all areas NONE/low — has_fixes false, empty matrix"
++d3="${TMP_ROOT}/t3"; mkdir -p "${d3}"
++setup_priorities "${d3}" security=NONE privacy=LOW compliance=XLOW
++out3="$(run_collect "${d3}")"
++assert_eq "has_fixes is false" "false" "$(get_output "${out3}" has_fixes)"
++assert_eq "matrix is empty" "[]" "$(get_output "${out3}" matrix_include)"
++
++# ── Test 4: empty / whitespace priority value is treated as no-fix ────────────
++echo "Test 4: empty priority value does not select the area"
++d4="${TMP_ROOT}/t4"; mkdir -p "${d4}"
++mkdir -p "${d4}/priorities/priority-correctness"
++printf '\n  \n' > "${d4}/priorities/priority-correctness/priority.txt"
++out4="$(run_collect "${d4}")"
++assert_eq "has_fixes is false for empty value" "false" "$(get_output "${out4}" has_fixes)"
++
++# ── Test 5: no priorities directory at all ────────────────────────────────────
++echo "Test 5: missing priorities directory — has_fixes false"
++d5="${TMP_ROOT}/t5"; mkdir -p "${d5}"
++out5="$(run_collect "${d5}")"
++assert_eq "has_fixes is false" "false" "$(get_output "${out5}" has_fixes)"
++assert_eq "matrix is empty" "[]" "$(get_output "${out5}" matrix_include)"
++
++echo
++if [[ "${failures}" -eq 0 ]]; then
++  echo "All collect-fix-areas tests passed."
++else
++  echo "${failures} assertion(s) failed."
++  exit 1
++fi
