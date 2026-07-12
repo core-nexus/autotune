@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned to commit SHAs up to date. The workflows pin
+  # each Action to a full 40-character commit SHA (with a version comment);
+  # Dependabot advances those SHAs via auditable PRs when new versions ship.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "auto-review"
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
