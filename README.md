@@ -11,6 +11,26 @@ A two-stage GitHub Actions pipeline:
 
 It also includes a **PR review workflow** that automatically reviews every pull request and can auto-fix issues it finds.
 
+## Data Handling
+
+These workflows run `anthropics/claude-code-action`, which sends your
+repository content — source code, comments, test fixtures, and diffs — to
+[Anthropic's API](https://www.anthropic.com/) for processing. This may involve
+transferring that content across jurisdictions (relevant to GDPR Art. 44–49 and
+similar cross-border transfer rules).
+
+Before installing this system, be aware:
+
+- **Do not run it on repositories that contain unmasked personal data** (e.g.
+  real PII in code comments or test fixtures) unless you have an appropriate
+  Data Processing Agreement (DPA) and transfer mechanism in place with
+  Anthropic. See Anthropic's
+  [data usage policies](https://www.anthropic.com/legal/commercial-terms) and
+  [privacy policy](https://www.anthropic.com/legal/privacy).
+- Codebase content leaves your repository and is processed by a third-party
+  sub-processor. Ensure this is compatible with your organization's data
+  handling and compliance requirements.
+
 ### Review Areas
 
 | Area | What It Checks |
