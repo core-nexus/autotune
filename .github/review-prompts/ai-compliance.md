@@ -29,7 +29,14 @@ Incorporate your findings into the review.
   - **Limited risk**: Chatbots, content recommendation, content generation
   - **Minimal risk**: Spam filters, search ranking
 
-#### Transparency Requirements (Art. 52)
+#### Transparency Requirements (Art. 50)
+
+> **Note:** In the adopted EU AI Act (Reg. (EU) 2024/1689) the transparency
+> obligations are **Article 50** — "Art. 52" was the number only in the 2021
+> Commission proposal. These obligations apply from **2 August 2026**: providers
+> must mark AI-generated synthetic text/image/audio/video in a machine-readable
+> way, and deployers publishing AI-generated text on matters of public interest
+> must disclose it (subject to a human-editorial-control exemption).
 
 - [ ] AI-generated content is clearly labeled as such
 - [ ] Users know when they are interacting with an AI system

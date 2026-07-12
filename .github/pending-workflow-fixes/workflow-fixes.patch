@@ -1,0 +1,362 @@
+diff --git a/.github/workflows/claude-pr-review.yml b/.github/workflows/claude-pr-review.yml
+index ed8bdcc..bc71d87 100644
+--- a/.github/workflows/claude-pr-review.yml
++++ b/.github/workflows/claude-pr-review.yml
+@@ -19,9 +19,12 @@ jobs:
+   # ─── Stage 1: Review ───────────────────────────────────────────────────────
+   review:
+     # Run on PR events (not dependabot), or on "/claude-review" comments on PRs
++    # Comment triggers are gated to repo insiders (OWNER/MEMBER/COLLABORATOR) to
++    # prevent arbitrary outside accounts on this public repo from spinning up
++    # expensive AI runs via /claude-review (abuse/cost control).
+     if: |
+       (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
+-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review'))
++      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review') && contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+     runs-on: ubuntu-latest
+     timeout-minutes: 30
+     permissions:
+@@ -45,7 +48,7 @@ jobs:
+           track_progress: true
+           claude_args: >-
+             --dangerously-skip-permissions
+-            --model opus
++            --model claude-opus-4-8
+             --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before reviewing. It contains the project's coding standards and conventions. Treat it as authoritative."
+ 
+           prompt: |
+@@ -104,6 +107,17 @@ jobs:
+             Do NOT prefix numbers with `#` (GitHub treats that as issue links).
+             For each item, reference the file and line. Prioritize by severity.
+ 
++            **AI transparency (required):** Begin the review comment with EXACTLY
++            this disclosure block, so external contributors know the feedback is
++            AI-generated (and may be wrong) and the model is recorded for audit
++            (EU AI Act Art. 50 transparency direction):
++
++            ```
++            > 🤖 This review was generated automatically by Claude (AI) via the
++            > claude-pr-review workflow. Model: `claude-opus-4-8`. Findings are
++            > unverified AI suggestions — please apply your own judgement.
++            ```
++
+             ## REQUIRED: Maximum Fix Priority
+ 
+             After all review items, you MUST end your review with a maximum fix
+@@ -139,7 +153,7 @@ jobs:
+     if: |
+       always() && (
+         (needs.review.result == 'success' && (needs.review.outputs.follow_up == 'HIGH' || needs.review.outputs.follow_up == 'MEDIUM' || needs.review.outputs.follow_up == 'LOW')) ||
+-        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix'))
++        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix') && contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+       )
+     runs-on: ubuntu-latest
+     timeout-minutes: 120
+@@ -162,7 +176,7 @@ jobs:
+           track_progress: true
+           claude_args: >-
+             --dangerously-skip-permissions
+-            --model opus
++            --model claude-opus-4-8
+             --max-turns 250
+             --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative."
+ 
+@@ -223,6 +237,9 @@ jobs:
+             ## Step 5: Commit and push
+ 
+             - Each commit explains what was fixed and why.
++            - Every commit MUST include an AI-attribution trailer so git history
++              records that the change was AI-authored:
++              `Co-Authored-By: Claude (AI) <noreply@anthropic.com>`
+             - Push your commits to the PR branch.
+ 
+             ## Step 6: WAIT FOR CI AND FIX UNTIL GREEN (CRITICAL)
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..fe3df19 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -83,7 +83,7 @@ jobs:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: >-
+             --dangerously-skip-permissions
+-            --model opus
++            --model claude-opus-4-8
+             --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before reviewing. It contains the project's coding standards and conventions. Treat it as authoritative."
+ 
+           prompt: |
+@@ -120,6 +120,17 @@ jobs:
+               (replace YYYY-MM-DD with today's date)
+             - Body: organized summary of ALL findings, grouped by severity
+ 
++            **AI transparency (required):** Begin the issue body with EXACTLY this
++            disclosure block (it labels the content as AI-generated and records the
++            model for audit/reproducibility, per EU AI Act Art. 50 transparency
++            obligations effective 2 August 2026):
++
++            ```
++            > 🤖 Generated by Claude (AI) via the codebase-review workflow.
++            > Model: `claude-opus-4-8` · action: `anthropics/claude-code-action@v1`.
++            > Findings are unverified AI output — a human should confirm before acting.
++            ```
++
+             For each finding include:
+             - **File and line number**
+             - **What the issue is** (specific, not vague)
+@@ -204,7 +215,7 @@ jobs:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+           claude_args: >-
+             --dangerously-skip-permissions
+-            --model opus
++            --model claude-opus-4-8
+             --max-turns 250
+             --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative."
+ 
+@@ -261,14 +272,19 @@ jobs:
+ 
+             1. Create branch: `review/${{ matrix.area }}-YYYY-MM-DD`
+                (replace YYYY-MM-DD with today's date)
+-            2. Each commit message should explain what was fixed and why.
++            2. Each commit message should explain what was fixed and why. Every
++               commit MUST include an AI-attribution trailer so git history records
++               that the change was AI-authored:
++               `Co-Authored-By: Claude (AI) <noreply@anthropic.com>`
+             3. Push: `git push -u origin HEAD`
+             4. Open a PR:
+                - Title: `review(${{ matrix.area }}): weekly codebase review fixes`
+                - Labels: `auto-review`
+                - Body: summary of what was fixed, organized by severity,
+-                 referencing the review issue. End with:
++                 referencing the review issue. End with these two lines (the
++                 second records the model for audit/reproducibility):
+                  `Automated fix by codebase-review workflow`
++                 `Model: claude-opus-4-8 · action: anthropics/claude-code-action@v1`
+             5. **After opening the PR**, search for any other OPEN pull requests
+                with the `auto-review` label whose title starts with
+                `review(${{ matrix.area }}):` (excluding the one you just created).
+diff --git a/.github/workflows/scripts-test.yml b/.github/workflows/scripts-test.yml
+new file mode 100644
+index 0000000..3c86a39
+--- /dev/null
++++ b/.github/workflows/scripts-test.yml
+@@ -0,0 +1,31 @@
++name: Script Tests
++
++# Lint and test the helper scripts under .github/workflows/scripts.
++# Keeps the priority-extraction logic (and its fail-loud behavior on malformed
++# AI output) covered so a regression is caught before it ships.
++
++on:
++  push:
++    paths:
++      - '.github/workflows/scripts/**'
++      - '.github/workflows/scripts-test.yml'
++  pull_request:
++    paths:
++      - '.github/workflows/scripts/**'
++      - '.github/workflows/scripts-test.yml'
++
++permissions:
++  contents: read
++
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Shellcheck scripts
++        run: shellcheck .github/workflows/scripts/*.sh .github/workflows/scripts/tests/*.sh
++
++      - name: Run script tests
++        run: .github/workflows/scripts/tests/test-extract-priority.sh
+diff --git a/.github/workflows/scripts/extract-pr-review-priority.sh b/.github/workflows/scripts/extract-pr-review-priority.sh
+index c28572e..d5f6be7 100755
+--- a/.github/workflows/scripts/extract-pr-review-priority.sh
++++ b/.github/workflows/scripts/extract-pr-review-priority.sh
+@@ -13,7 +13,18 @@ set -euo pipefail
+ 
+ PRIORITY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+   --jq '[.[] | select(.body | test("MAXIMUM_FIX_PRIORITY:"))] | last | .body' 2>/dev/null \
+-  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || echo "NONE")
++  | grep -oP '(?<=MAXIMUM_FIX_PRIORITY:)[A-Z_]+' || true)
++
++if [[ -z "${PRIORITY}" ]]; then
++  # No parseable MAXIMUM_FIX_PRIORITY marker was found in any PR comment. This is
++  # NOT the same as the review explicitly reporting NONE — a genuine "good to
++  # merge" review still emits `MAXIMUM_FIX_PRIORITY:NONE`. An empty value means
++  # the review comment was missing/malformed (or the API call failed), so we
++  # failed to parse a verdict. Surface it loudly instead of silently coercing to
++  # NONE, so a real finding can't be dropped by a formatting slip unnoticed.
++  echo "::warning::Could not parse MAXIMUM_FIX_PRIORITY from PR #${PR_NUMBER} review comments — review output was missing or malformed. Defaulting to NONE, so the fix stage will be SKIPPED."
++  PRIORITY="NONE"
++fi
+ 
+ echo "MAXIMUM_FIX_PRIORITY: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..15a8a5c 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -39,6 +39,17 @@ if [[ -z "${PRIORITY}" ]]; then
+   echo "Extracted from issue list: ${PRIORITY:-<empty>}"
+ fi
+ 
+-PRIORITY="${PRIORITY:-NONE}"
++if [[ -z "${PRIORITY}" ]]; then
++  # No MAXIMUM_FIX_PRIORITY marker was found in the execution file OR the issue
++  # list. This is NOT the same as the review explicitly reporting NONE — a
++  # genuine "clean" review still emits `MAXIMUM_FIX_PRIORITY:NONE`, which the
++  # grep above would have captured. An empty value here means the AI output was
++  # missing or malformed and we FAILED to parse a verdict. Surface it loudly
++  # (the notify job watches for `::warning::`) instead of silently coercing to
++  # NONE, so a real HIGH finding can't be dropped by a formatting slip unnoticed.
++  echo "::warning::Could not parse MAXIMUM_FIX_PRIORITY for '${REVIEW_AREA}' — review output was missing or malformed. Defaulting to NONE, so the fix stage will be SKIPPED. Check the review step logs."
++  PRIORITY="NONE"
++fi
++
+ echo "MAXIMUM_FIX_PRIORITY for ${REVIEW_AREA}: ${PRIORITY}"
+ echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+diff --git a/.github/workflows/scripts/tests/test-extract-priority.sh b/.github/workflows/scripts/tests/test-extract-priority.sh
+new file mode 100755
+index 0000000..8d904b9
+--- /dev/null
++++ b/.github/workflows/scripts/tests/test-extract-priority.sh
+@@ -0,0 +1,137 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Tests for the priority-extraction scripts, focused on the distinction between
++# "the review explicitly reported NONE" and "we failed to parse a verdict"
++# (which must emit a ::warning:: rather than silently coercing to NONE).
++#
++# Run: .github/workflows/scripts/tests/test-extract-priority.sh
++#
++# No network / no real `gh` needed: a stub `gh` is placed on PATH per-case.
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++EXTRACT_REVIEW="${SCRIPT_DIR}/extract-review-priority.sh"
++EXTRACT_PR="${SCRIPT_DIR}/extract-pr-review-priority.sh"
++
++WORK="$(mktemp -d)"
++trap 'rm -rf "${WORK}"' EXIT
++
++PASS=0
++FAIL=0
++
++# make_gh <stdout-string> — write a stub `gh` that ignores args and prints the
++# given string on stdout, then return its containing dir (for prepending to PATH).
++make_gh() {
++  local out="$1" dir
++  dir="$(mktemp -d)"
++  cat > "${dir}/gh" <<EOF
++#!/usr/bin/env bash
++printf '%s' '${out}'
++EOF
++  chmod +x "${dir}/gh"
++  printf '%s' "${dir}"
++}
++
++# run_review <execution-file-content|"__none__"> <gh-stdout> -> "priority|output"
++# `output` is the script's combined stdout+stderr — GitHub Actions `::warning::`
++# workflow commands are written to stdout, so the assertions look there.
++run_review() {
++  local file_content="$1" gh_out="$2"
++  local out_file exec_file log_file gh_dir
++  out_file="$(mktemp)"; log_file="$(mktemp)"
++  gh_dir="$(make_gh "${gh_out}")"
++
++  local exec_arg=""
++  if [[ "${file_content}" != "__none__" ]]; then
++    exec_file="$(mktemp)"
++    printf '%s' "${file_content}" > "${exec_file}"
++    exec_arg="${exec_file}"
++  fi
++
++  GITHUB_OUTPUT="${out_file}" REVIEW_AREA="testarea" REPO="owner/repo" \
++    EXECUTION_FILE="${exec_arg}" GH_TOKEN="x" \
++    PATH="${gh_dir}:${PATH}" \
++    bash "${EXTRACT_REVIEW}" > "${log_file}" 2>&1
++
++  local priority
++  priority="$(grep -oP '(?<=priority=).*' "${out_file}" || true)"
++  printf '%s|%s' "${priority}" "$(cat "${log_file}")"
++}
++
++# run_pr <gh-stdout> -> prints "priority|stdout"
++run_pr() {
++  local gh_out="$1"
++  local out_file stdout_file gh_dir
++  out_file="$(mktemp)"; stdout_file="$(mktemp)"
++  gh_dir="$(make_gh "${gh_out}")"
++
++  GITHUB_OUTPUT="${out_file}" REPO="owner/repo" PR_NUMBER="42" GH_TOKEN="x" \
++    PATH="${gh_dir}:${PATH}" \
++    bash "${EXTRACT_PR}" > "${stdout_file}" 2>&1
++
++  local priority
++  priority="$(grep -oP '(?<=priority=).*' "${out_file}" || true)"
++  printf '%s|%s' "${priority}" "$(cat "${stdout_file}")"
++}
++
++assert() {
++  local name="$1" cond="$2"
++  if [[ "${cond}" == "1" ]]; then
++    echo "  PASS: ${name}"; PASS=$((PASS + 1))
++  else
++    echo "  FAIL: ${name}"; FAIL=$((FAIL + 1))
++  fi
++}
++
++echo "extract-review-priority.sh"
++
++# 1. Explicit NONE in execution file -> NONE, and NOT flagged as a parse failure.
++res="$(run_review 'blah blah
++MAXIMUM_FIX_PRIORITY:NONE' '')"
++prio="${res%%|*}"; err="${res#*|}"
++assert "explicit NONE -> priority NONE" "$([[ "${prio}" == "NONE" ]] && echo 1 || echo 0)"
++assert "explicit NONE -> no ::warning::" "$([[ "${err}" != *"::warning::"* ]] && echo 1 || echo 0)"
++
++# 2. Real HIGH finding is preserved.
++res="$(run_review 'findings...
++MAXIMUM_FIX_PRIORITY:HIGH' '')"
++prio="${res%%|*}"
++assert "explicit HIGH -> priority HIGH" "$([[ "${prio}" == "HIGH" ]] && echo 1 || echo 0)"
++
++# 3. Non-empty output with NO marker, and empty fallback -> NONE WITH warning.
++res="$(run_review 'the model produced some prose but forgot the marker line' '')"
++prio="${res%%|*}"; err="${res#*|}"
++assert "malformed output -> priority NONE" "$([[ "${prio}" == "NONE" ]] && echo 1 || echo 0)"
++assert "malformed output -> emits ::warning::" "$([[ "${err}" == *"::warning::"* ]] && echo 1 || echo 0)"
++
++# 4. No execution file, fallback issue body carries a marker -> parsed from fallback.
++res="$(run_review '__none__' 'issue body
++MAXIMUM_FIX_PRIORITY:MEDIUM')"
++prio="${res%%|*}"; err="${res#*|}"
++assert "fallback MEDIUM -> priority MEDIUM" "$([[ "${prio}" == "MEDIUM" ]] && echo 1 || echo 0)"
++assert "fallback MEDIUM -> no ::warning::" "$([[ "${err}" != *"::warning::"* ]] && echo 1 || echo 0)"
++
++echo "extract-pr-review-priority.sh"
++
++# 5. Comment carries explicit NONE -> NONE, no warning.
++res="$(run_pr 'PR looks good
++MAXIMUM_FIX_PRIORITY:NONE')"
++prio="${res%%|*}"; out="${res#*|}"
++assert "PR explicit NONE -> priority NONE" "$([[ "${prio}" == "NONE" ]] && echo 1 || echo 0)"
++assert "PR explicit NONE -> no ::warning::" "$([[ "${out}" != *"::warning::"* ]] && echo 1 || echo 0)"
++
++# 6. Comment carries HIGH -> HIGH.
++res="$(run_pr 'issues found
++MAXIMUM_FIX_PRIORITY:HIGH')"
++prio="${res%%|*}"
++assert "PR HIGH -> priority HIGH" "$([[ "${prio}" == "HIGH" ]] && echo 1 || echo 0)"
++
++# 7. No parseable marker (empty/malformed API response) -> NONE WITH warning.
++res="$(run_pr '')"
++prio="${res%%|*}"; out="${res#*|}"
++assert "PR no marker -> priority NONE" "$([[ "${prio}" == "NONE" ]] && echo 1 || echo 0)"
++assert "PR no marker -> emits ::warning::" "$([[ "${out}" == *"::warning::"* ]] && echo 1 || echo 0)"
++
++echo ""
++echo "Passed: ${PASS}, Failed: ${FAIL}"
++[[ "${FAIL}" -eq 0 ]]

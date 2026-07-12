@@ -204,6 +204,16 @@ PR opened / ready for review / /claude-review comment
 └─────────────────────────────────────┘
 ```
 
+### Comment Trigger Access Control
+
+On a **public** repository, the `/claude-review` and `/claude-fix` comment
+triggers are gated so that only users with an `author_association` of `OWNER`,
+`MEMBER`, or `COLLABORATOR` can start a run. This prevents arbitrary outside
+accounts from spinning up expensive Claude sessions (the fix stage can run up to
+120 minutes). If you fork this template into a **private** repo where every
+commenter is already trusted, you may relax that gate — but leave it in place for
+any public repo.
+
 ### Priority Levels
 
 | Priority | Meaning | Auto-fix? |
@@ -255,7 +265,7 @@ Each review area uses one Claude session (~30 min review + up to 90 min fix). Ru
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
-- Use `--model sonnet` instead of `--model opus` in the workflow files for cheaper reviews (with some quality tradeoff)
+- Swap the pinned `--model claude-opus-4-8` for a cheaper pinned model (e.g. `--model claude-sonnet-5`) in the workflow files for cheaper reviews (with some quality tradeoff). Keep the model **pinned to an explicit ID** rather than a floating alias (`opus`/`sonnet`) so review and fix output stays reproducible and auditable
 
 ## License
 
