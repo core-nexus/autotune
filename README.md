@@ -1,4 +1,4 @@
-# Claude Code Review
+# Autotune
 
 Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 12 focus areas, finds issues, and auto-fixes them via pull requests.
 
@@ -30,7 +30,7 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 
 ### Schedule
 
-All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigger any review manually via `workflow_dispatch`.
+All reviews are scheduled together every **Sunday at 06:00 UTC**, but the review matrix runs at most 3 areas concurrently (`max-parallel: 3`) and the fix stage runs serially (`max-parallel: 1`). You can also trigger any review manually via `workflow_dispatch`.
 
 ## Setup
 
@@ -46,9 +46,9 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 ---
 
 ```
-Install the claude-code-review system from https://github.com/core-nexus/claude-code-review into this repository. Here's what to do:
+Install the autotune review system from https://github.com/core-nexus/autotune into this repository. Here's what to do:
 
-1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
+1. Clone or fetch the review system files from https://github.com/core-nexus/autotune
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
    - .github/review-prompts/  (all 12 .md files)
@@ -88,7 +88,7 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 3. Add `CLAUDE_CODE_OAUTH_TOKEN` to your repo's Actions secrets
 4. Create the `auto-review` label: `gh label create auto-review --description "Automated codebase review" --color "0E8A16"`
 5. Customize (see Configuration below)
-6. Push to your default branch
+6. Commit everything on a feature branch and open a PR (recommended so the workflow files get a review before landing on your default branch)
 
 ## Configuration
 
@@ -162,7 +162,7 @@ Sunday 06:00 UTC (or manual trigger)
 ┌─────────────────────────────────────┐
 │  STAGE 1: REVIEW (30 min timeout)   │
 │                                     │
-│  For each review area (in parallel):│
+│  For each area (max 3 concurrent):  │
 │  1. Read CLAUDE.md + review prompt  │
 │  2. Deep-dive audit of codebase     │
 │  3. Create GitHub issue with        │
@@ -191,18 +191,25 @@ PR opened / ready for review / /claude-review comment
         │
         ▼
 ┌─────────────────────────────────────┐
-│  STAGE 1: REVIEW                    │
+│  STAGE 1: REVIEW (30 min timeout)   │
 │  Post review comment with findings  │
 │  Set MAXIMUM_FIX_PRIORITY           │
 └─────────────────────────────────────┘
         │
         ▼ (if LOW, MEDIUM, or HIGH)
 ┌─────────────────────────────────────┐
-│  STAGE 2: FIX                       │
+│  STAGE 2: FIX (120 min timeout)     │
 │  Fix findings, push commits to PR   │
 │  Monitor CI until green (3 retries) │
 └─────────────────────────────────────┘
 ```
+
+Two manual comment commands are supported on any PR:
+
+- **`/claude-review`** — run the review stage (and the fix stage after it, if the findings meet the fix threshold).
+- **`/claude-fix`** — skip the review and run the fix stage directly against the existing findings.
+
+Note the PR fix stage has a 120-minute timeout, which differs from the codebase-review fix stage's 90-minute timeout.
 
 ### Priority Levels
 
