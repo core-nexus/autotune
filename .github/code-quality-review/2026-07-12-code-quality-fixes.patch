@@ -1,0 +1,317 @@
+diff --git a/.github/workflows/claude-pr-review.yml b/.github/workflows/claude-pr-review.yml
+index ed8bdcc..445c659 100644
+--- a/.github/workflows/claude-pr-review.yml
++++ b/.github/workflows/claude-pr-review.yml
+@@ -53,50 +53,21 @@ jobs:
+             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+ 
+             You are reviewing a pull request. If a CLAUDE.md exists, read it first.
+-            Review the diff against these focus areas. Only comment on things that
+-            actually appear in the changed code — skip sections not relevant to this PR.
+-
+-            1. **Security & Authorization**
+-               - API endpoints that access user data verify identity
+-               - Admin-only functions enforce admin access
+-               - Ownership checks prevent cross-user data access
+-               - No secrets in code, no logging of sensitive data
+-               - Input validation on all user-provided data
+-
+-            2. **Privacy & Data Protection**
+-               - PII never appears in production logs
+-               - New data collection is minimal and justified
+-               - Visibility/permission settings are respected
+-               - Third-party data sharing is explicit and consensual
+-
+-            3. **Error Handling (Fail Fast, Fail Loud)**
+-               - NEVER `catch (_e) {}` or `.catch(() => {})` — this hides bugs
+-               - Backend: prefer throwing; let the framework catch unhandled errors
+-               - Frontend: graceful degradation is fine, BUT always report to error service
+-               - Ask: "If this fails in production, will we find out?"
+-
+-            4. **Code Quality & Style**
+-               - No `any` types, use `import type` for type-only imports
+-               - Follow project formatting conventions
+-               - No `console.log` in production code
+-               - No floating or misused promises
+-
+-            5. **Scalability & Performance**
+-               - Database queries use indexes for large tables, not full scans
+-               - Watch for N+1 patterns
+-               - Rate limiting and cost controls are not bypassed
+-               - Bundle size: flag large new dependencies
+-
+-            6. **Testing**
+-               - New logic needs tests
+-               - NEVER mock internal code — only mock external services
+-               - Tests should exercise real code paths
+-               - Assertions are meaningful, not just `toBeDefined()`
+-
+-            7. **Documentation Accuracy**
+-               - If the PR touches code with associated docs, verify they still match
+-               - New public functions/APIs should have clear descriptions
+-               - Flag stale docs that reference removed or renamed code
++
++            The canonical review criteria live in `.github/review-prompts/` and
++            are the single source of truth (the same files the weekly codebase
++            review uses). Read the checklists relevant to the changed code and
++            review the diff against them. Only comment on things that actually
++            appear in the changed code — skip criteria not relevant to this PR.
++
++            Read and apply the relevant checklists:
++            - `.github/review-prompts/security.md` — auth, secrets, input validation
++            - `.github/review-prompts/privacy.md` — PII, data collection, sharing
++            - `.github/review-prompts/error-handling.md` — fail fast, fail loud
++            - `.github/review-prompts/code-quality.md` — types, style, dead code
++            - `.github/review-prompts/performance.md` — queries, N+1, bundle size
++            - `.github/review-prompts/testing.md` — coverage, meaningful assertions
++            - `.github/review-prompts/documentation.md` — stale/missing docs
+ 
+             ---
+ 
+@@ -150,10 +121,28 @@ jobs:
+       id-token: write
+       actions: read
+     steps:
++      # On the "/claude-fix" (issue_comment) path there is no PR head ref in the
++      # event payload, so a bare checkout lands on the default branch. Resolve
++      # the PR's head branch first so the fixer starts from — and pushes back
++      # to — the PR branch rather than main. On the pull_request path this step
++      # is skipped and checkout uses its default (the PR merge ref).
++      - name: Resolve PR head branch
++        id: prref
++        if: github.event_name == 'issue_comment'
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPO: ${{ github.repository }}
++          PR_NUMBER: ${{ github.event.issue.number }}
++        run: |
++          BRANCH=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" \
++            --json headRefName --jq .headRefName)
++          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
++
+       - name: Checkout repository
+         uses: actions/checkout@v4
+         with:
+-          fetch-depth: 1
++          fetch-depth: 0
++          ref: ${{ steps.prref.outputs.branch }}
+ 
+       - name: Fix review issues
+         uses: anthropics/claude-code-action@v1
+diff --git a/.github/workflows/codebase-review.yml b/.github/workflows/codebase-review.yml
+index 45ebd36..d57b453 100644
+--- a/.github/workflows/codebase-review.yml
++++ b/.github/workflows/codebase-review.yml
+@@ -1,7 +1,7 @@
+ name: Automated Codebase Review
+ 
+ # Two-stage pipeline: review → fix (if MEDIUM+ priority).
+-# Weekly deep-dive reviews across 11 focus areas, all running Sunday at 06:00 UTC.
++# Weekly deep-dive reviews across 12 focus areas, all running Sunday at 06:00 UTC.
+ # Each review analyzes the full codebase for its focus area, then the
+ # fix stage creates a PR with actual code changes.
+ #
+@@ -68,8 +68,6 @@ jobs:
+       max-parallel: 3
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+-    outputs:
+-      priority: ${{ steps.extract-priority.outputs.priority }}
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+@@ -172,13 +170,28 @@ jobs:
+           REPO: ${{ github.repository }}
+         run: .github/workflows/scripts/extract-review-priority.sh
+ 
++      # Persist this area's priority to a per-area artifact. Job-level matrix
++      # outputs collapse to a single value across all legs (whichever finishes
++      # last wins), so the fix job reads each area's priority from its own
++      # artifact instead of from a shared job output.
++      - name: Save priority for ${{ matrix.area }}
++        run: echo "${{ steps.extract-priority.outputs.priority }}" > priority.txt
++
++      - name: Upload priority artifact
++        uses: actions/upload-artifact@v4
++        with:
++          name: priority-${{ matrix.area }}
++          path: priority.txt
++          retention-days: 1
++
+   # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+   fix:
+     needs: [determine-area, review]
+-    if: |
+-      always() &&
+-      needs.review.result == 'success' &&
+-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
++    # Always start the job; per-area gating happens at the step level below.
++    # Matrix job outputs cannot carry a distinct value per area, so each leg
++    # reads its own area's priority from the artifact the review job saved and
++    # only runs the fix steps when that priority is MEDIUM or HIGH.
++    if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 90
+     permissions:
+@@ -193,12 +206,43 @@ jobs:
+       matrix:
+         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
+     steps:
++      - name: Download priority for ${{ matrix.area }}
++        uses: actions/download-artifact@v4
++        continue-on-error: true  # review leg may have failed → no artifact
++        with:
++          name: priority-${{ matrix.area }}
++
++      - name: Resolve priority for ${{ matrix.area }}
++        id: priority
++        run: |
++          if [[ -f priority.txt ]]; then
++            VALUE="$(cat priority.txt)"
++          else
++            VALUE="NONE"
++          fi
++          echo "Priority for ${{ matrix.area }}: ${VALUE}"
++          echo "value=${VALUE}" >> "$GITHUB_OUTPUT"
++          if [[ "${VALUE}" == "HIGH" || "${VALUE}" == "MEDIUM" ]]; then
++            echo "should_fix=true" >> "$GITHUB_OUTPUT"
++          else
++            echo "should_fix=false" >> "$GITHUB_OUTPUT"
++          fi
++
++      # Compute the fix branch name exactly once so the fix step and the CI
++      # trigger step below share a single source of truth for the date.
++      - name: Compute fix branch name
++        id: branch
++        if: steps.priority.outputs.should_fix == 'true'
++        run: echo "name=review/${{ matrix.area }}-$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
++
+       - name: Checkout repository
++        if: steps.priority.outputs.should_fix == 'true'
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Fix review findings — ${{ matrix.area }}
++        if: steps.priority.outputs.should_fix == 'true'
+         uses: anthropics/claude-code-action@v1
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+@@ -211,7 +255,7 @@ jobs:
+           prompt: |
+             REPO: ${{ github.repository }}
+             REVIEW AREA: ${{ matrix.area }}
+-            REVIEW PRIORITY: ${{ needs.review.outputs.priority }}
++            REVIEW PRIORITY: ${{ steps.priority.outputs.value }}
+ 
+             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
+ 
+@@ -259,8 +303,8 @@ jobs:
+ 
+             ## Step 4: Create branch, commit, push, and open PR
+ 
+-            1. Create branch: `review/${{ matrix.area }}-YYYY-MM-DD`
+-               (replace YYYY-MM-DD with today's date)
++            1. Create branch: `${{ steps.branch.outputs.name }}`
++               (use this EXACT branch name — do not reformat or recompute the date)
+             2. Each commit message should explain what was fixed and why.
+             3. Push: `git push -u origin HEAD`
+             4. Open a PR:
+@@ -283,20 +327,21 @@ jobs:
+ 
+             ## REMINDER: You succeed by pushing code fixes, not by writing reviews.
+ 
+-      # Trigger CI on the new PR branch (customize workflow names for your project)
++      # Trigger CI on the new PR branch (customize workflow names for your project).
++      # BRANCH comes from the single computed source above, so it always matches
++      # the branch name the fix step was told to create.
+       - name: Trigger CI workflows
+-        if: success()
++        if: steps.priority.outputs.should_fix == 'true' && success()
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           REPO: ${{ github.repository }}
+-        run: |
+-          export BRANCH="review/${{ matrix.area }}-$(date -u +%Y-%m-%d)"
+-          .github/workflows/scripts/trigger-ci-workflows.sh
++          BRANCH: ${{ steps.branch.outputs.name }}
++        run: .github/workflows/scripts/trigger-ci-workflows.sh
+ 
+   # ─── Notify on failure (configure your notification channel) ────────────────
+   notify:
+     needs: [review, fix]
+-    if: always() && github.event_name != 'pull_request' && (needs.review.result == 'failure' || needs.fix.result == 'failure')
++    if: always() && (needs.review.result == 'failure' || needs.fix.result == 'failure')
+     runs-on: ubuntu-latest
+     steps:
+       - name: Notify on failure
+diff --git a/.github/workflows/scripts/extract-review-priority.sh b/.github/workflows/scripts/extract-review-priority.sh
+index 185b2d4..16ec045 100755
+--- a/.github/workflows/scripts/extract-review-priority.sh
++++ b/.github/workflows/scripts/extract-review-priority.sh
+@@ -25,17 +25,20 @@ else
+   echo "No execution file found at: ${EXECUTION_FILE:-<unset>}"
+ fi
+ 
+-# Method 2 (fallback): list recent issues via REST API
++# Method 2 (fallback): list the newest OPEN "findings" issue via the API.
++# state=open + an explicit createdAt sort avoids picking a stale closed or
++# superseded issue, and matching ": findings" skips "clean" reports (which
++# carry MAXIMUM_FIX_PRIORITY:NONE and would mask a real finding).
+ if [[ -z "${PRIORITY}" ]]; then
+   echo "Falling back to gh issue list..."
+   BODY=$(gh issue list \
+     --repo "${REPO}" \
+-    --state all --limit 10 \
+-    --json title,body \
+-    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA})\"))] | .[0].body" \
++    --state open --limit 20 \
++    --json title,body,createdAt \
++    --jq "[.[] | select(.title | startswith(\"review(${REVIEW_AREA}): findings\"))] | sort_by(.createdAt) | reverse | .[0].body" \
+     2>/dev/null || true)
+   PRIORITY=$(echo "${BODY}" \
+-    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' || true)
++    | grep -oP 'MAXIMUM_FIX_PRIORITY:\K[A-Z_]+' | tail -1 || true)
+   echo "Extracted from issue list: ${PRIORITY:-<empty>}"
+ fi
+ 
+diff --git a/.github/workflows/scripts/resolve-review-area.sh b/.github/workflows/scripts/resolve-review-area.sh
+index 71631a5..006cd22 100755
+--- a/.github/workflows/scripts/resolve-review-area.sh
++++ b/.github/workflows/scripts/resolve-review-area.sh
+@@ -12,11 +12,31 @@ set -euo pipefail
+ 
+ : "${GITHUB_OUTPUT:?}" "${EVENT_NAME:?}"
+ 
+-ALL_AREAS='["security","privacy","compliance","ai-compliance","error-handling","code-quality","performance","testing","documentation","dependency-health","correctness","e-commerce"]'
++# Single source of truth for the area list: the review-prompt files under
++# .github/review-prompts/. Adding or removing a prompt file automatically
++# changes the areas this workflow runs. NOTE: the workflow_dispatch `options:`
++# list in codebase-review.yml must be kept in sync with these filenames by hand
++# — GitHub Actions cannot populate `choice` options dynamically.
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++PROMPTS_DIR="${SCRIPT_DIR}/../../review-prompts"
+ 
+-if [[ "${EVENT_NAME}" = "workflow_dispatch" ]]; then
+-  AREA="${INPUT_REVIEW_AREA:-security}"
+-  if [[ "${AREA}" = "all" ]]; then
++ALL_AREAS="$(find "${PROMPTS_DIR}" -maxdepth 1 -name '*.md' -printf '%f\n' 2>/dev/null \
++  | sed 's/\.md$//' \
++  | sort \
++  | jq -R . \
++  | jq -cs .)"
++
++# Defensive fallback: if the prompt directory could not be read (missing dir or
++# no jq available), fall back to the known list so the workflow still runs.
++if [[ -z "${ALL_AREAS}" || "${ALL_AREAS}" == "[]" ]]; then
++  ALL_AREAS='["security","privacy","compliance","ai-compliance","error-handling","code-quality","performance","testing","documentation","dependency-health","correctness","e-commerce"]'
++fi
++
++if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
++  # review_area is a required `choice` input, so INPUT_REVIEW_AREA is always set
++  # on this path; the :- default is only a defensive guard.
++  AREA="${INPUT_REVIEW_AREA:-all}"
++  if [[ "${AREA}" == "all" ]]; then
+     echo "areas_json=${ALL_AREAS}" >> "${GITHUB_OUTPUT}"
+   else
+     echo "areas_json=[\"${AREA}\"]" >> "${GITHUB_OUTPUT}"
