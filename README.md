@@ -128,7 +128,7 @@ The `notify` job in `codebase-review.yml` prints a warning by default. To get Sl
 
 ```yaml
 - name: Notify Slack on failure
-  uses: slackapi/slack-github-action@v3.0.1
+  uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
   with:
     webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
     webhook-type: incoming-webhook
@@ -214,11 +214,48 @@ PR opened / ready for review / /claude-review comment
 | MEDIUM | Real issues | Yes |
 | HIGH | Critical issues | Yes |
 
+## Security Model
+
+**Read this before installing on a public repository.** These workflows run an
+autonomous Claude agent that can execute shell commands and, in the fix stages,
+**commit and push code and open pull requests** using a write-scoped
+`GITHUB_TOKEN` and your paid `CLAUDE_CODE_OAUTH_TOKEN`. Several trust boundaries
+matter:
+
+- **Untrusted input reaches the agent.** PR diffs, PR/issue comments, and review
+  issue bodies are attacker-influenceable and are treated by the agent as *data
+  to act on*, not as trusted instructions. This is an indirect prompt-injection
+  surface. The agent runs with `--dangerously-skip-permissions`, so the guardrail
+  against a successful injection is *who can supply that input*, not an
+  in-session approval prompt.
+- **Who can trigger a run.** `/claude-review` and `/claude-fix` comment triggers
+  are gated to repository `OWNER`, `MEMBER`, and `COLLABORATOR` — external users
+  cannot invoke them, cannot burn your token, and cannot drive the write-capable
+  fixer over attacker-controlled content. Fork `pull_request` runs do not receive
+  secrets (the workflows use `pull_request`, never `pull_request_target`).
+- **What the fix stage trusts as "findings".** The codebase-review fix stage acts
+  only on the specific issue number produced by its own review stage, and
+  verifies that issue was authored by the automation's own bot identity
+  (`app/claude`) before trusting its body. Anyone can open an issue, so title
+  matching alone is not sufficient and is not used.
+- **Supply chain.** All third-party actions are pinned to full commit SHAs (with
+  a `# vX` comment) rather than mutable tags. Keep them updated with Dependabot
+  for GitHub Actions.
+- **Secrets.** No secrets are committed; the only secret references are
+  `CLAUDE_CODE_OAUTH_TOKEN` and `GITHUB_TOKEN`. Each job requests the minimum
+  permissions it needs (review stages are `contents: read`; only fix stages get
+  `contents: write`).
+
+Because the fix stages are intentionally write-capable and run
+`--dangerously-skip-permissions`, install this system only on repositories where
+you trust the maintainer set that the trigger gates above admit.
+
 ## Adding Custom Review Areas
 
 1. Create a new `.md` file in `.github/review-prompts/` with your checklist
 2. Add the area name to `workflow_dispatch.inputs.review_area.options` in `codebase-review.yml`
-3. Add it to `ALL_AREAS` in `resolve-review-area.sh`
+3. Add it to both `VALID_AREAS` and `ALL_AREAS` in `resolve-review-area.sh`
+   (the allowlist and the JSON list must stay in sync)
 
 Follow the existing prompt structure: Objective, Review Checklist with checkboxes, and Severity Guide.
 
