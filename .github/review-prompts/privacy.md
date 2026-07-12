@@ -65,6 +65,18 @@ and protected throughout the codebase.
 - [ ] Session data, tokens, and temporary records have expiration
 - [ ] Log retention policies are appropriate for the data sensitivity
 
+## Reporting Guardrail
+
+When you report a finding that involves a concrete secret, credential, token,
+private key, or a real PII value (email, phone, name, address, etc.), refer to
+it ONLY by location and type — e.g. "hardcoded API key at `path:line`" or "real
+customer email embedded in `fixtures/users.json:12`". NEVER paste, quote, or
+closely paraphrase the literal value into an issue, comment, or PR body. Review
+outputs are visible to everyone with repo access (on public repos, the entire
+internet), so reproducing a discovered value there converts a contained leak
+into a broadcast one. Keep findings actionable by location without amplifying
+the exposure.
+
 ## Severity Guide
 
 - **CRITICAL**: PII in production logs, user data exposed to other users

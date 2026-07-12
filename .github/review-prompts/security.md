@@ -67,6 +67,16 @@ authorization, injection, secrets, and attack surface reduction.
 - [ ] Webhook handlers verify signatures (Stripe, etc.)
 - [ ] GraphQL/REST endpoints enforce query depth and complexity limits
 
+## Reporting Guardrail
+
+When you report a finding that involves a concrete secret, credential, token,
+private key, or a real PII value, refer to it ONLY by location and type — e.g.
+"hardcoded API key at `path:line`". NEVER paste, quote, or closely paraphrase
+the literal value into an issue, comment, or PR body. Review outputs are visible
+to everyone with repo access (on public repos, the entire internet), so
+reproducing a discovered secret there converts a contained leak into a broadcast
+one. Keep findings actionable by location without amplifying the exposure.
+
 ## Severity Guide
 
 - **CRITICAL**: Auth bypass, data exposure, secret leak, injection vulnerability

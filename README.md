@@ -39,6 +39,31 @@ All reviews run simultaneously every **Sunday at 06:00 UTC**. You can also trigg
 - A GitHub repository
 - A [Claude Code OAuth token](https://docs.anthropic.com/en/docs/claude-code/github-actions) (`CLAUDE_CODE_OAUTH_TOKEN` secret)
 
+### Data & Privacy
+
+Before enabling this system, understand what it does with your repository's data:
+
+- **Repository contents are transmitted to Anthropic.** Both workflows invoke
+  `anthropics/claude-code-action@v1`, which sends repository content — source
+  files, diffs, and issue/PR text — to Anthropic's API for analysis. This is the
+  intended, consented purpose of the tool, and it happens every time a review or
+  fix runs.
+- **The entire repository is in scope.** A review reads the whole codebase, which
+  in a real project may include committed secrets, `.env` fixtures, test data with
+  real PII, or embedded customer records. All of that is transmitted off-platform.
+  Do **not** enable this on repositories containing unredacted sensitive data
+  without first confirming the applicable Anthropic data-usage / commercial terms
+  cover your use.
+- **Review your terms.** See Anthropic's
+  [data usage documentation](https://privacy.anthropic.com/en/articles/10023580-is-my-data-used-for-model-training)
+  and the [commercial terms](https://www.anthropic.com/legal/commercial-terms)
+  to confirm how your data is handled and retained.
+- **Findings are visible to everyone with repo access.** Issues, PR comments, and
+  PR bodies produced by these workflows are readable by all collaborators — and on
+  public repositories, by anyone. The prompts instruct the agent to reference any
+  discovered secret or PII by location and type only, never by literal value, so a
+  contained leak is not broadcast into a review artifact.
+
 ### Quick Install (Copy-Paste for Claude)
 
 **Copy this entire block into Claude Code (or any AI coding agent) and let it install the system into your repo:**
