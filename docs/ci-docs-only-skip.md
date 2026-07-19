@@ -29,7 +29,7 @@ on a check that will never arrive. For required checks, use Option B.
 
 ## Option B — `detect-docs-only.sh` (for REQUIRED status checks)
 
-`scripts/detect-docs-only.sh` reads a PR's changed-file list on stdin and prints
+`.github/workflows/scripts/detect-docs-only.sh` reads a PR's changed-file list on stdin and prints
 `true` (run the full suite) or `false` (docs-only, skip). Gate your expensive
 jobs on it. Because the job still **runs** and **reports success** (it just skips
 the expensive steps), a required check stays green and the PR stays mergeable.
@@ -77,7 +77,7 @@ without waiting.
 
 ### What counts as "docs"
 
-`detect-docs-only.sh` treats these as docs (safe to skip):
+`.github/workflows/scripts/detect-docs-only.sh` treats these as docs (safe to skip):
 
 - `*.md`, `*.txt`, `*.html` (but see the exception below)
 - anything under `doc/` or `docs/`
@@ -90,7 +90,7 @@ framework error page ends in `.html` but is real application code. Adjust the
 
 ### Tests
 
-`scripts/detect-docs-only.test.sh` exercises the classifier against docs-only,
+`.github/workflows/scripts/detect-docs-only.test.sh` exercises the classifier against docs-only,
 code, mixed, app-shell, and empty-input cases. Run it with:
 
 ```bash
