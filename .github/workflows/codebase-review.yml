@@ -1,7 +1,7 @@
 name: Automated Codebase Review
 
 # Two-stage pipeline: review → fix (if MEDIUM+ priority).
-# Weekly deep-dive reviews across 12 focus areas, all running Sunday at 06:00 UTC.
+# Weekly deep-dive reviews across 15 focus areas, all running Sunday at 06:00 UTC.
 # Each review analyzes the full codebase for its focus area, then the
 # fix stage creates a PR with actual code changes.
 #
@@ -31,6 +31,9 @@ on:
           - dependency-health
           - correctness
           - e-commerce
+          - infrastructure
+          - architecture
+          - resilience
           - all
 
 concurrency:

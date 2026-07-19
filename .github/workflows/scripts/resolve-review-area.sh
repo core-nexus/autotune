@@ -12,7 +12,7 @@ set -euo pipefail
 
 : "${GITHUB_OUTPUT:?}" "${EVENT_NAME:?}"
 
-ALL_AREAS='["security","privacy","compliance","ai-compliance","error-handling","code-quality","performance","testing","documentation","dependency-health","correctness","e-commerce"]'
+ALL_AREAS='["security","privacy","compliance","ai-compliance","error-handling","code-quality","performance","testing","documentation","dependency-health","correctness","e-commerce","infrastructure","architecture","resilience"]'
 
 if [[ "${EVENT_NAME}" = "workflow_dispatch" ]]; then
   AREA="${INPUT_REVIEW_AREA:-security}"

@@ -1,6 +1,6 @@
 # Claude Code Review
 
-Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 12 focus areas, finds issues, and auto-fixes them via pull requests.
+Automated codebase review system powered by Claude. Runs weekly deep-dive audits across 15 focus areas, finds issues, and auto-fixes them via pull requests.
 
 ## What It Does
 
@@ -27,6 +27,9 @@ It also includes a **PR review workflow** that automatically reviews every pull 
 | **documentation** | Stale docs, missing API docs, CLAUDE.md accuracy |
 | **dependency-health** | Vulnerabilities, outdated packages, license compliance, supply chain |
 | **e-commerce** | Payments, subscriptions, webhooks, credit systems, billing math |
+| **infrastructure** | CI/CD, pre-commit hooks, linting/formatting, build scripts, env hygiene |
+| **architecture** | Schema/data-model changes, module boundaries, scalability of recent changes |
+| **resilience** | Rate limits, timeouts, retries, idempotency, graceful degradation, failure blast radius |
 
 ### Schedule
 
@@ -51,7 +54,7 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 1. Clone or fetch the review system files from https://github.com/core-nexus/claude-code-review
 
 2. Copy these directories into this repo (merge with existing .github/ if present):
-   - .github/review-prompts/  (all 12 .md files)
+   - .github/review-prompts/  (all 15 .md files)
    - .github/workflows/codebase-review.yml
    - .github/workflows/claude-pr-review.yml
    - .github/workflows/scripts/  (all 4 .sh files)
@@ -94,7 +97,7 @@ Install the claude-code-review system from https://github.com/core-nexus/claude-
 
 ### Remove Irrelevant Review Areas
 
-Not every project needs all 12 areas. Remove what doesn't apply:
+Not every project needs all 15 areas. Remove what doesn't apply:
 
 - **No payments?** Delete `e-commerce.md` and remove `e-commerce` from the workflow_dispatch options and `ALL_AREAS` in `resolve-review-area.sh`
 - **No AI features?** Delete `ai-compliance.md` and remove it similarly
@@ -238,7 +241,10 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 │   ├── ai-compliance.md
 │   ├── documentation.md
 │   ├── dependency-health.md
-│   └── e-commerce.md
+│   ├── e-commerce.md
+│   ├── infrastructure.md
+│   ├── architecture.md
+│   └── resilience.md
 └── workflows/
     ├── codebase-review.yml      # Weekly deep-dive reviews
     ├── claude-pr-review.yml     # PR-level reviews
@@ -251,7 +257,7 @@ Follow the existing prompt structure: Objective, Review Checklist with checkboxe
 
 ## Cost Considerations
 
-Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 12 areas weekly means up to 12 review sessions and potentially 12 fix sessions per week. To reduce costs:
+Each review area uses one Claude session (~30 min review + up to 90 min fix). Running all 15 areas weekly means up to 15 review sessions and potentially 15 fix sessions per week. To reduce costs:
 
 - Remove review areas that don't apply to your project
 - Adjust the schedule (biweekly instead of weekly)
