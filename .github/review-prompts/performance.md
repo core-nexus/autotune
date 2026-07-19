@@ -44,6 +44,10 @@ At 100x scale:
   - Every list query needs a limit or pagination strategy
 - [ ] **Over-fetching**: Queries returning entire records when the client
       uses only a few fields — at scale, this wastes bandwidth and memory
+- [ ] **Live/reactive query cost**: Each real-time subscription is a standing
+      query that re-runs on every relevant change — audit how many exist and the
+      cost of each (a broad, frequently-invalidated live query is expensive at
+      scale)
 
 ### Write Performance
 
@@ -53,20 +57,31 @@ At 100x scale:
   - Fix: use sharding, per-user counters, or eventual consistency
 - [ ] **Cascading writes**: One write triggering many downstream writes
   - At 10x scale, a cascade of 10 becomes a cascade of 100
+- [ ] **Transaction limits**: Mutations stay within the backend's per-transaction
+      read/write limits — batch or paginate bulk operations rather than touching
+      thousands of rows in a single transaction
 
 ### Frontend Performance
 
+- [ ] **Core Web Vitals**: The rendered experience meets the key thresholds
+  - **LCP** (Largest Contentful Paint) — the largest above-the-fold element renders quickly
+  - **CLS** (Cumulative Layout Shift) — content doesn't jump as the page loads (reserve space for images/embeds)
+  - **TBT / INP** (Total Blocking Time / Interaction to Next Paint) — the main thread stays responsive to input
 - [ ] **Main thread blocking**: Heavy computation in the render cycle
   - 3D rendering, data transformation, sorting/filtering large datasets
   - Fix: web workers, `requestAnimationFrame`, virtual scrolling
-- [ ] **Bundle size**: Large dependencies that could be lazy-loaded
-  - Verify tree-shaking is effective (no `import *` for large libraries)
+- [ ] **Bundle size & code-splitting**: Heavy dependencies kept out of the entry chunk
+  - Verify tree-shaking is effective (no `import *` for large libraries; `import type` for type-only imports)
+  - Route-level lazy loading for heavy, rarely-visited routes
+  - No duplicate copies of the same dependency at different versions in the bundle
   - At scale, every KB matters for mobile users on slow connections
-- [ ] **Memory leaks**: Event listeners, timers, subscriptions not cleaned up
+- [ ] **Memory & lifecycle cleanup**: Event listeners, timers, intervals, and
+      store/subscription handles are torn down on unmount
   - Growing arrays/maps that are never pruned
+  - Heavy resources (animation loops, 3D contexts, media elements) are disposed
 - [ ] **Virtual scrolling**: Any list that could have >50 items needs virtual
       scrolling (feeds, search results, member lists)
-- [ ] **Image optimization**: Lazy loading, responsive sizing, modern formats
+- [ ] **Image optimization**: Lazy loading, responsive sizing (`srcset`), modern formats
 
 ### Network Performance
 

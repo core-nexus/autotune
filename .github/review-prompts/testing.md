@@ -48,6 +48,9 @@ Focus on real code execution over mocking.
   - Verify error types and messages
 - [ ] **Test descriptions are clear**: `it('should ...')` describes the behavior
 - [ ] **No flaky tests**: Tests that sometimes pass and sometimes fail
+  - Timing-dependent tests (waiting on fixed sleeps rather than a condition)
+  - Order-dependent tests (rely on another test having run first)
+  - Tests that depend on external or shared mutable state
 - [ ] **No skipped tests**: `it.skip()` or `describe.skip()` without explanation
 - [ ] **Tests don't test implementation details**: Focus on behavior, not internals
 
@@ -68,6 +71,13 @@ Focus on real code execution over mocking.
 - [ ] E2E tests fail on JS errors and `console.error`
 - [ ] Test count is reasonable (not excessive — think smoke tests)
 - [ ] Fixtures and setup follow established patterns
+
+### Payment / Billing Integration (if applicable)
+
+- [ ] Subscription lifecycle is tested (create, renew, upgrade/downgrade, cancel, expire)
+- [ ] One-time purchases / top-ups are tested
+- [ ] Webhook handling is tested (signature verification, idempotency, each event type)
+- [ ] Test artifacts (customers, subscriptions) are cleaned up after integration runs
 
 ### Missing Test Categories
 
