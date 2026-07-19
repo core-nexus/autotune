@@ -65,6 +65,11 @@ PRIMARY documentation for both AI agents and developers.
 - [ ] Environment-specific behavior is documented
 - [ ] Feature flags or toggles are documented
 
+### Changelog
+
+- [ ] `CHANGELOG.md` (if it exists): recent entries match actual shipped features
+- [ ] Entries are categorized correctly (New / Improved / Fixed)
+
 ## What to Fix
 
 For each stale or inaccurate doc:

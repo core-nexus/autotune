@@ -39,6 +39,23 @@ finding with the gravity that financial code demands.
 - [ ] Feature gating checks the correct subscription tier and status
 - [ ] Free tier users get correct defaults and limits
 
+### Plan Copy & Entitlement Truthfulness
+
+What you _say_ a plan contains must match what it _actually grants_. Marketing
+copy (plan taglines, "unlimited" labels) that contradicts the data-driven
+credit/feature list on the same plan card is a trust and compliance issue.
+
+- [ ] No tier advertises "unlimited", "no boundaries", or otherwise implies an
+      uncapped allotment while its actual allowance is finite (credit-capped,
+      seat-limited, quota-bound). This applies to the plan description AND to any
+      hardcoded marketing labels on the surfaces that render it.
+- [ ] Per-tier numbers (price, credits/quota, feature flags) come from a single
+      source of truth; any value duplicated outside it still matches. Prefer
+      deriving from the source of truth over maintaining a second copy.
+- [ ] A test pins plan copy against the entitlement data (e.g. asserting no
+      credit-capped tier's description contains "unlimited"), so a plan change
+      cannot silently reintroduce the mismatch.
+
 ### Credit / Token System (if applicable)
 
 - [ ] Credit/token balance can never go below the configured minimum
@@ -59,6 +76,12 @@ finding with the gravity that financial code demands.
 ### Checkout & Payment Flows
 
 - [ ] Checkout session creation includes all required parameters
+- [ ] Every money-moving write (create, charge, refund, subscription
+      create/update) carries an **idempotency key**, and that key is
+      **deterministic** — a pure function of stable ids (subscription id,
+      pending-purchase id, payment-intent id, user id, billing period), never
+      seeded with `Date.now()`, `Math.random()`, `randomUUID()`, or an attempt
+      counter. A non-deterministic key can double-charge on retry.
 - [ ] Price IDs match the correct product and interval
 - [ ] Success/cancel URLs are correct and don't leak session data
 - [ ] Rate limiting on checkout creation is correctly enforced

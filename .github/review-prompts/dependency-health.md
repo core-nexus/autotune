@@ -5,6 +5,24 @@
 Audit the project's dependency tree for security vulnerabilities, outdated
 packages, license compliance, unused dependencies, and supply chain risks.
 
+## Scope: Focus on What Automation Can't Fix
+
+If the project runs automated dependency updates (Dependabot, Renovate),
+**don't report "a newer version exists"** — the bot already opens those PRs on
+its own schedule (grouping ecosystems, honoring cooldowns, ignoring risky
+majors). "Package X is at 2.1 and 2.3 is out" is noise it will handle.
+
+Focus this review on problems automation **can't** fix on its own:
+
+1. **Unpatched vulnerabilities** — especially in transitive deps where the
+   parent hasn't released a fix (requires an `overrides` pin or removal).
+2. **Unused / extraneous dependencies** that should be deleted.
+3. **License risks**, supply-chain red flags, and lock-file integrity issues.
+4. **Bundle bloat** from heavy or duplicated dependencies.
+
+(If the project has **no** update automation, the "Outdated Dependencies"
+section below still applies — flag security patches and stale critical deps.)
+
 ## Prerequisites
 
 Before running any dependency commands, install dependencies first:
@@ -17,14 +35,41 @@ npm install  # or yarn install, pnpm install — use the project's package manag
 
 ### Vulnerability Scanning
 
-- [ ] Run `npm audit` (or equivalent) and review all findings
+- [ ] **Actually run** `npm audit` (or the project's equivalent) and read every
+      finding — don't rely on memory; the tree changes every week. If it reports
+      zero high/critical findings, **say so explicitly** — a clean audit is a
+      valid and valuable result, not something to stay silent about.
 - [ ] Categorize vulnerabilities by severity (critical, high, moderate, low)
-- [ ] For each vulnerability:
-  - Is there a patched version available? → Update
-  - Is the vulnerable code path actually used by the app? → Assess real risk
-  - Is there a workaround or alternative package? → Document
+- [ ] For each HIGH/CRITICAL advisory, record: package + version path, advisory
+      id, whether it's **direct** or **transitive**, and whether it's reachable
+      in **production** runtime, **dev-only**, or **build-only**
 - [ ] Check if any dependencies have known supply chain attacks
 - [ ] Verify no `postinstall` scripts do anything suspicious
+
+#### Remediation Strategy (decision tree)
+
+Most real findings are in **transitive** dependencies that automation can't fix
+because the direct parent hasn't published a release pulling in the patch. Work
+in this order:
+
+1. **Direct dep, patched release available** → let the update bot open the PR;
+   just note it's in flight.
+2. **Transitive dep, patch available in a child package** → add an entry to your
+   package manager's override mechanism (npm/pnpm `overrides`, yarn
+   `resolutions`) pinning the transitive dep to a patched version. Comment which
+   advisory each override addresses so the pin can be removed once the parent
+   upstream catches up.
+3. **Dev-only / build-only vuln with no patch path** → document the exposure
+   (who can exploit it, under what conditions) rather than papering over it with
+   an override that breaks the build.
+4. **Parent pinned to a major you've deliberately not bumped** → flag the
+   trade-off for a human to decide.
+5. **Vulnerable package is type-only or otherwise removable** (`@types/*` that
+   ships its own stale copy, abandoned helpers) → remove it (see Unused
+   Dependencies). Cleanest fix.
+
+When adding overrides, verify install still succeeds, the advisory no longer
+appears, and the lint/test suite still passes.
 
 ### Outdated Dependencies
 
@@ -80,6 +125,8 @@ Review the health of the project's most critical dependencies:
 - [ ] No unexpected changes in lock file (integrity hash mismatches)
 - [ ] Lock file doesn't reference private registries unexpectedly
 - [ ] Package resolution is consistent (no conflicting versions)
+- [ ] Declared runtime/engine constraints (`engines.node`, etc.) match what CI
+      and production actually run
 
 ### Supply Chain Security
 

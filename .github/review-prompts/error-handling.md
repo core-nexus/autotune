@@ -19,6 +19,30 @@ Search the ENTIRE codebase for these anti-patterns and flag every instance:
 - [ ] `catch` blocks that return `null`/`undefined` without reporting the error
 - [ ] `try/catch` around code that should be allowed to throw
 
+### Over-Suppression of Legitimate Alerts (The Mirror Sin)
+
+The opposite failure of the Cardinal Sin: muting a **real** signal instead of
+fixing it. "Fail loud" is about alerting on the right things — the default is
+fail-fast, so bias toward alerting. Flag any change that hides an actionable
+error from your error-reporting service:
+
+- [ ] A **misconfiguration / missing environment variable / unconfigured admin
+      surface** routed to a silent path (a `beforeSend`-style filter, a new
+      expected-error-code allowlist entry, a "return a sentinel instead of
+      throwing" refactor). These MUST alert — that is how you learn the system is
+      broken and fix it. This is a finding regardless of severity.
+- [ ] A new entry added to the expected/ignored-error allowlist that is **not** a
+      benign, per-user business outcome. Only expected outcomes already shown to
+      the user (limit reached, insufficient credits, rate limited, nothing to do)
+      belong there — never anything an engineer or admin could fix.
+- [ ] An error path that alerts on a **transient failure the system already
+      recovered from** (e.g. a retry that then succeeded). That is noise the other
+      direction — log it as a distinct "retry" class, don't page. But a failure
+      that persists **after** retries are exhausted MUST alert.
+- [ ] A `beforeSend` / ignore-list / sentinel added "to make a noisy alert go
+      away" without evidence the underlying condition is genuinely benign and
+      non-actionable. Suppression is the rare exception, not the default fix.
+
 ### Backend Error Handling
 
 - [ ] Prefer throwing over catching — let the framework's error reporting catch
@@ -69,6 +93,13 @@ Search the ENTIRE codebase for these anti-patterns and flag every instance:
 - [ ] Rate limiting returns clear error responses, not silent drops
 - [ ] Graceful degradation: if a non-critical feature fails, the rest works
 
+### Error Monitoring Completeness
+
+- [ ] The error-reporting service is configured and receiving errors in production
+- [ ] Critical code paths have explicit error tracking
+- [ ] Error grouping is meaningful (not everything lumped into one issue)
+- [ ] Alerts exist for critical error types or error-rate spikes
+
 ### CI/CD Failure Visibility
 
 - [ ] All scheduled (cron) CI workflows notify the team on failure
@@ -82,10 +113,12 @@ Search the ENTIRE codebase for these anti-patterns and flag every instance:
 3. **The Swallower**: `.catch(() => null)` — Fix: report + handle explicitly
 4. **The Hider**: `try { ... } catch { return defaultValue }` — Fix: at minimum report
 5. **The Optimist**: No error handling at all on external calls — Fix: add proper handling
+6. **The Muffler**: suppressing a legitimate alert (misconfig / missing env var routed to
+   a `beforeSend` filter, an expected-error allowlist, or a sentinel) — Fix: keep it loud, fix the root cause
 
 ## Severity Guide
 
 - **CRITICAL**: Silent catch hiding security or data-loss errors
-- **HIGH**: Backend functions without error reporting, user-facing failures with no feedback
-- **MEDIUM**: Missing error context, incomplete error messages, missing retries
-- **LOW**: Verbose error handling that could be simplified, minor context improvements
+- **HIGH**: Backend functions without error reporting, user-facing failures with no feedback; a misconfiguration / missing-env-var alert suppressed instead of surfaced
+- **MEDIUM**: Missing error context, incomplete error messages, missing retries; an unjustified allowlist/`beforeSend` suppression of a plausibly-actionable error
+- **LOW**: Verbose error handling that could be simplified, minor context improvements; alerting on transient failures the system already recovered from

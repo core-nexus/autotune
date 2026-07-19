@@ -8,6 +8,11 @@ on:
     types:
       - ready_for_review
       - opened
+    # Docs/text-only PRs have nothing to review or fix — skip to save cost.
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.txt'
+      - 'docs/**'
   issue_comment:
     types: [created]
 
@@ -18,10 +23,12 @@ concurrency:
 jobs:
   # ─── Stage 1: Review ───────────────────────────────────────────────────────
   review:
-    # Run on PR events (not dependabot), or on "/claude-review" comments on PRs
+    # Run on PR events (not dependabot), or on "/claude-review" comments on PRs.
+    # The author_association gate on the comment branch stops a fork-PR author
+    # from triggering a review+fix run with full repo secrets on their own diff.
     if: |
       (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review'))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -139,7 +146,7 @@ jobs:
     if: |
       always() && (
         (needs.review.result == 'success' && (needs.review.outputs.follow_up == 'HIGH' || needs.review.outputs.follow_up == 'MEDIUM' || needs.review.outputs.follow_up == 'LOW')) ||
-        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix'))
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       )
     runs-on: ubuntu-latest
     timeout-minutes: 120
