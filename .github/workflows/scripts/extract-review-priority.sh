@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Extract MAXIMUM_FIX_PRIORITY from a codebase review execution file or GitHub issue.
+# Extract MAXIMUM_FIX_PRIORITY from a codebase review execution file or GitHub
+# issue, then decide whether the fix stage should run based on the configured
+# threshold.
 #
 # Required env vars:
 #   GITHUB_OUTPUT
@@ -11,8 +13,13 @@ set -euo pipefail
 #
 # Optional env vars:
 #   EXECUTION_FILE - path to the claude-code-action execution file
+#   MAXIMUM_FIX_PRIORITY - minimum severity that triggers a fix (default: MEDIUM).
+#     Valid values: HIGH, MEDIUM, LOW, XLOW. Uses the same scale as the review
+#     output. A review priority is "should_fix=true" iff it is >= this threshold.
 
 : "${GITHUB_OUTPUT:?}" "${REVIEW_AREA:?}" "${REPO:?}"
+
+THRESHOLD="${MAXIMUM_FIX_PRIORITY:-MEDIUM}"
 
 PRIORITY=""
 
@@ -40,5 +47,31 @@ if [[ -z "${PRIORITY}" ]]; then
 fi
 
 PRIORITY="${PRIORITY:-NONE}"
-echo "MAXIMUM_FIX_PRIORITY for ${REVIEW_AREA}: ${PRIORITY}"
+
+priority_rank() {
+  case "$1" in
+    HIGH) echo 4 ;;
+    MEDIUM) echo 3 ;;
+    LOW) echo 2 ;;
+    XLOW) echo 1 ;;
+    NONE | *) echo 0 ;;
+  esac
+}
+
+PRI_RANK=$(priority_rank "${PRIORITY}")
+THRESHOLD_RANK=$(priority_rank "${THRESHOLD}")
+
+# NONE never triggers a fix, regardless of threshold.
+if (( THRESHOLD_RANK > 0 )) && (( PRI_RANK >= THRESHOLD_RANK )); then
+  SHOULD_FIX=true
+else
+  SHOULD_FIX=false
+fi
+
+echo "MAXIMUM_FIX_PRIORITY (review output) for ${REVIEW_AREA}: ${PRIORITY}"
+echo "MAXIMUM_FIX_PRIORITY (threshold):                         ${THRESHOLD}"
+echo "should_fix:                                               ${SHOULD_FIX}"
+
 echo "priority=${PRIORITY}" >> "${GITHUB_OUTPUT}"
+echo "threshold=${THRESHOLD}" >> "${GITHUB_OUTPUT}"
+echo "should_fix=${SHOULD_FIX}" >> "${GITHUB_OUTPUT}"

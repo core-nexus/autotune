@@ -20,6 +20,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# MAXIMUM_FIX_PRIORITY is the MINIMUM review severity at which the fix stage
+# runs automatically. Findings below it are left for a human (or a manual
+# /claude-fix). Valid values: HIGH, MEDIUM, LOW, XLOW. Default LOW = fix
+# anything worth fixing; raise to MEDIUM/HIGH to auto-fix only the serious stuff.
+env:
+  MAXIMUM_FIX_PRIORITY: LOW
+
 jobs:
   # ─── Stage 1: Review ───────────────────────────────────────────────────────
   review:
@@ -37,7 +44,9 @@ jobs:
       id-token: write
       actions: read
     outputs:
-      follow_up: ${{ steps.check-followup.outputs.priority }}
+      priority: ${{ steps.check-followup.outputs.priority }}
+      should_fix: ${{ steps.check-followup.outputs.should_fix }}
+      threshold: ${{ steps.check-followup.outputs.threshold }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -137,15 +146,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          # The action's execution transcript is the most reliable source for
+          # the just-posted priority (no comments-API propagation race).
+          EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
+          MAXIMUM_FIX_PRIORITY: ${{ env.MAXIMUM_FIX_PRIORITY }}
         run: .github/workflows/scripts/extract-pr-review-priority.sh
 
   # ─── Stage 2: Fix (only if review found issues worth fixing) ────────────────
   fix-review-issues:
     needs: review
-    # Run after review if priority is LOW/MEDIUM/HIGH, or directly on "/claude-fix"
+    # Run after review if it cleared the MAXIMUM_FIX_PRIORITY threshold, or
+    # directly on a "/claude-fix" comment.
     if: |
       always() && (
-        (needs.review.result == 'success' && (needs.review.outputs.follow_up == 'HIGH' || needs.review.outputs.follow_up == 'MEDIUM' || needs.review.outputs.follow_up == 'LOW')) ||
+        (needs.review.result == 'success' && needs.review.outputs.should_fix == 'true') ||
         (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/claude-fix') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       )
     runs-on: ubuntu-latest
@@ -176,7 +190,8 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-            REVIEW FOLLOW-UP PRIORITY: ${{ needs.review.outputs.follow_up || 'MANUAL' }}
+            REVIEW FOLLOW-UP PRIORITY: ${{ needs.review.outputs.priority || 'MANUAL' }}
+            MAXIMUM_FIX_PRIORITY (threshold): ${{ env.MAXIMUM_FIX_PRIORITY }}
 
             ## CRITICAL INSTRUCTION: YOU ARE A FIXER, NOT A REVIEWER
 
@@ -192,13 +207,15 @@ jobs:
 
             Read ALL comments on this PR, especially from the code review.
             The review contains numbered findings with severity levels.
-            You MUST fix every issue rated LOW or higher.
+            You MUST fix every issue rated at or above the fix threshold
+            MAXIMUM_FIX_PRIORITY (${{ env.MAXIMUM_FIX_PRIORITY }}).
 
             **How to read the review:**
             a) Use `gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments"` to fetch all PR comments.
             b) Look for the review comment with numbered findings.
-            c) For EACH finding rated LOW or above, understand what file and
-               line it refers to, what the problem is, and what the fix should be.
+            c) For EACH finding rated at or above the threshold
+               (${{ env.MAXIMUM_FIX_PRIORITY }}), understand what file and line
+               it refers to, what the problem is, and what the fix should be.
 
             **CRITICAL: "CI is green" does NOT mean the review is addressed.**
             The review found problems that CI cannot detect. You MUST fix review
