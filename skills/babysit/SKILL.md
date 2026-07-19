@@ -72,14 +72,21 @@ gh api "repos/${REPO}/issues/{PR#}/comments" --jq '[.[] | {created_at, body}]' >
 HEAD_AT="$(gh api repos/${REPO}/pulls/{PR#}/commits --jq '.[-1].commit.committer.date')"
 ```
 
+**Distinguishing review-finding comments from `/claude-fix` response comments.** Both the review workflow and the fix workflow post via `anthropics/claude-code-action`, so their replies share the same `**Claude finished @<trigger-user>'s task in <duration>**` header. They differ in `<trigger-user>`:
+
+- **Review-finding comment** — auto-fired by the review workflow, so `<trigger-user>` is `claude[bot]`. Body matches `^\*\*Claude finished @claude\[bot\]'s task`.
+- **`/claude-fix` response comment** — fired by whoever typed `/claude-fix` (a human, or this skill posting as a human). Body matches `^\*\*Claude finished @<non-bot-user>'s task`.
+
+Both bodies frequently mention `MAXIMUM_FIX_PRIORITY:MEDIUM` — the review states findings at that threshold; the fix-response echoes the threshold it operated against. Matching on `MAXIMUM_FIX_PRIORITY:` alone treats fix-responses as new findings, flips `reviewNeedsFix` true forever, and burns `/claude-fix` retries on already-addressed PRs. Always restrict the review-finding match to the `claude[bot]`-triggered variant.
+
 From `comments-{PR#}.json` and `HEAD_AT`, derive:
 
-1. `reviewNeedsFix` — find the newest comment whose body contains `MAXIMUM_FIX_PRIORITY:<value>`. If the value is `NONE` / `XLOW` / `LOW` (or no such comment exists), `reviewNeedsFix = false`. If `QA_ENABLED=true`, also require a comment containing `<!-- ai-qa-review -->` to exist — if QA hasn't posted yet, `reviewNeedsFix = false` (wait for QA). Otherwise, look for any later comment containing `/claude-fix` as a standalone slash command on its own line. If present, `reviewNeedsFix = false` (already dispatched). Else, `reviewNeedsFix = true`.
+1. `reviewNeedsFix` — find the newest **review-finding comment** (body contains `MAXIMUM_FIX_PRIORITY:<value>` AND body starts with `**Claude finished @claude[bot]'s task`). If the value is `NONE` / `XLOW` / `LOW` (or no such comment exists), `reviewNeedsFix = false`. If `QA_ENABLED=true`, also require a comment containing `<!-- ai-qa-review -->` to exist — if QA hasn't posted yet, `reviewNeedsFix = false` (wait for QA). Otherwise, look for any later comment containing `/claude-fix` as a standalone slash command on its own line. If present, `reviewNeedsFix = false` (already dispatched). Else, `reviewNeedsFix = true`.
 2. `reviewMissing` — `true` if NO comment on the PR contains `MAXIMUM_FIX_PRIORITY:` at all (a review has never successfully completed on this PR). Else `false`.
 3. `fixAttemptsOnHead` — count of comments with `created_at >= HEAD_AT` whose body contains `/claude-fix` as a standalone slash command on its own line.
 4. `reviewAttemptsOnHead` — same, but for `/claude-review`.
 
-Idempotent by construction: once `/claude-fix` is posted for a given `MAXIMUM_FIX_PRIORITY:` comment, subsequent runs see it and stop posting — until a newer finding appears.
+Idempotent by construction: once `/claude-fix` is posted for a given review-finding `MAXIMUM_FIX_PRIORITY:` comment, subsequent runs see it and stop posting — until a newer review-finding appears.
 
 Loop safety: `/claude-fix` and `/claude-review` are each capped at **3 posts per head commit**. A new push resets both counters. This bounds the retry loop when the underlying failure can't be cleared by re-invocation (and is cheap to un-cap by pushing any commit, including an empty one).
 
