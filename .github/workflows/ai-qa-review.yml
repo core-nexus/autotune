@@ -28,6 +28,11 @@ on:
     types:
       - opened
       - ready_for_review
+    # Docs/CI/skills-only PRs have nothing browser-observable to QA — skip.
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.txt'
+      - 'docs/**'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -53,12 +58,14 @@ jobs:
   qa:
     # Triggered by:
     #   (a) PR opened / ready_for_review,
-    #   (b) a non-bot author commenting `/qa-review` on a PR,
+    #   (b) a non-bot OWNER/MEMBER/COLLABORATOR commenting `/qa-review` on a PR,
     #   (c) manual workflow_dispatch.
     # Dependabot is skipped: mechanical dep bumps don't need visual QA.
+    # The author_association gate stops a fork-PR author from spending Anthropic
+    # credits / exposing the browser MCP by commenting on their own PR.
     if: |
       (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/qa-review')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !endsWith(github.actor, '[bot]') && contains(github.event.comment.body, '/qa-review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
       (github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 45
