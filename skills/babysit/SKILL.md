@@ -68,21 +68,23 @@ A review comment ending in `MAXIMUM_FIX_PRIORITY: MEDIUM` / `HIGH` is unfinished
 Also compute loop-safety counters so we don't post `/claude-fix` or `/claude-review` endlessly when nothing is changing (e.g. a self-referential workflow-file PR where the review check fails for a reason no fix can clear until merge).
 
 ```
-gh api "repos/${REPO}/issues/{PR#}/comments" --jq '[.[] | {created_at, body}]' > /tmp/comments-{PR#}.json
+gh api "repos/${REPO}/issues/{PR#}/comments" --jq '[.[] | {created_at, user: .user.login, body}]' > /tmp/comments-{PR#}.json
 HEAD_AT="$(gh api repos/${REPO}/pulls/{PR#}/commits --jq '.[-1].commit.committer.date')"
 ```
 
-**Distinguishing review-finding comments from `/claude-fix` response comments.** Both the review workflow and the fix workflow post via `anthropics/claude-code-action`, so their replies share the same `**Claude finished @<trigger-user>'s task in <duration>**` header. They differ in `<trigger-user>`:
+**Telling a review-finding comment apart from a `/claude-fix` response.** Both are authored by `claude[bot]` (both post via `anthropics/claude-code-action`), and both echo `MAXIMUM_FIX_PRIORITY:<level>` — the review states findings at that level; the fix-response echoes the threshold it worked against. Their `**Claude finished @<user>'s task**` headers do **not** separate them either: the review fires on `pull_request`, so its header names the *human PR author* (`github.actor`) — exactly like a human-typed `/claude-fix` response. The reliable signal is **position relative to the `/claude-fix` command**:
 
-- **Review-finding comment** — auto-fired by the review workflow, so `<trigger-user>` is `claude[bot]`. Body matches `^\*\*Claude finished @claude\[bot\]'s task`.
-- **`/claude-fix` response comment** — fired by whoever typed `/claude-fix` (a human, or this skill posting as a human). Body matches `^\*\*Claude finished @<non-bot-user>'s task`.
+- A **`/claude-fix` response** is a `claude[bot]` `MAXIMUM_FIX_PRIORITY:` comment whose nearest *preceding* trigger comment (a standalone `/claude-review` or `/claude-fix` on its own line) is `/claude-fix`.
+- A **review-finding** is a `claude[bot]` `MAXIMUM_FIX_PRIORITY:` comment that is NOT preceded by a `/claude-fix` — it responds either to the PR opening (auto-review) or to a `/claude-review`.
 
-Both bodies frequently mention `MAXIMUM_FIX_PRIORITY:MEDIUM` — the review states findings at that threshold; the fix-response echoes the threshold it operated against. Matching on `MAXIMUM_FIX_PRIORITY:` alone treats fix-responses as new findings, flips `reviewNeedsFix` true forever, and burns `/claude-fix` retries on already-addressed PRs. Always restrict the review-finding match to the `claude[bot]`-triggered variant.
+Matching on `MAXIMUM_FIX_PRIORITY:` alone (without this classification) treats a fix-response as a fresh finding, flips `reviewNeedsFix` true forever, and burns `/claude-fix` retries on already-addressed PRs. (Do NOT try to distinguish them by the `@<user>` in the header — the review names the human PR author, not `claude[bot]`.)
+
+To classify: walk the PR's comments in chronological order tracking the most recent trigger command seen (`/claude-review` or `/claude-fix`); tag each `claude[bot]`-authored `MAXIMUM_FIX_PRIORITY:` comment as a review-finding or a fix-response per the rule above.
 
 From `comments-{PR#}.json` and `HEAD_AT`, derive:
 
-1. `reviewNeedsFix` — find the newest **review-finding comment** (body contains `MAXIMUM_FIX_PRIORITY:<value>` AND body starts with `**Claude finished @claude[bot]'s task`). If the value is `NONE` / `XLOW` / `LOW` (or no such comment exists), `reviewNeedsFix = false`. If `QA_ENABLED=true`, also require a comment containing `<!-- ai-qa-review -->` to exist — if QA hasn't posted yet, `reviewNeedsFix = false` (wait for QA). Otherwise, look for any later comment containing `/claude-fix` as a standalone slash command on its own line. If present, `reviewNeedsFix = false` (already dispatched). Else, `reviewNeedsFix = true`.
-2. `reviewMissing` — `true` if NO comment on the PR contains `MAXIMUM_FIX_PRIORITY:` at all (a review has never successfully completed on this PR). Else `false`.
+1. `reviewNeedsFix` — find the newest **review-finding** comment (classified as above; author `claude[bot]`). If its `MAXIMUM_FIX_PRIORITY` value is `NONE` / `XLOW` / `LOW` (or no review-finding exists), `reviewNeedsFix = false`. If `QA_ENABLED=true`, also require a comment containing `<!-- ai-qa-review -->` to exist — if QA hasn't posted yet, `reviewNeedsFix = false` (wait for QA). Otherwise, look for a `/claude-fix` command comment posted AFTER that review-finding. If present, `reviewNeedsFix = false` (already dispatched). Else, `reviewNeedsFix = true`.
+2. `reviewMissing` — `true` if NO **review-finding** comment exists on the PR (a review has never posted findings). A `/claude-fix` response that echoes `MAXIMUM_FIX_PRIORITY:` does NOT count. Else `false`.
 3. `fixAttemptsOnHead` — count of comments with `created_at >= HEAD_AT` whose body contains `/claude-fix` as a standalone slash command on its own line.
 4. `reviewAttemptsOnHead` — same, but for `/claude-review`.
 
