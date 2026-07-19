@@ -1,0 +1,166 @@
+name: Update Changelog
+
+# AI-generated changelog workflow.
+#
+# On a schedule (and on demand), this job:
+#   1. Finds PRs merged into the base branch since the most recent changelog entry.
+#   2. Asks Claude Code to write user-facing changelog entries for the
+#      user-visible changes (skipping refactors, CI, tests, dependency bumps).
+#   3. Opens a pull request with the updated changelog. It NEVER pushes to the
+#      base branch directly — every change lands via a reviewable PR.
+#
+# What to configure:
+#   - schedule:        the cron below (defaults to Mondays and Thursdays 15:00 UTC).
+#   - CHANGELOG_FILE:  the target file (defaults to a root CHANGELOG.md,
+#                      Keep-a-Changelog style with New / Improved / Fixed).
+#   - BASE_BRANCH:     the branch to compare against and target PRs at (default: main).
+#   - CLAUDE_CODE_OAUTH_TOKEN: repo secret used to authenticate Claude Code.
+#                      Uses Claude Code plan credits, not API credits.
+#   - CLAUDE_PAT (optional): a fine-grained PAT with contents:write +
+#                      pull-requests:write. Lets the opened PR trigger other
+#                      workflows (e.g. CI). Falls back to the default token.
+
+on:
+  schedule:
+    # Twice weekly: Monday and Thursday at 15:00 UTC. Adjust to taste.
+    - cron: '0 15 * * 1,4'
+  workflow_dispatch:
+
+env:
+  # The changelog file to update. Keep-a-Changelog style, dated sections,
+  # newest-first, with New / Improved / Fixed subsections.
+  CHANGELOG_FILE: CHANGELOG.md
+  # Branch to compare merged PRs against and to target the PR at.
+  BASE_BRANCH: main
+  # Where the fetched PR data is written for Claude to read.
+  PR_JSON_FILE: ${{ runner.temp }}/merged-prs.json
+
+jobs:
+  update-changelog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CLAUDE_PAT || github.token }}
+
+      - name: Create changelog branch
+        id: branch
+        run: |
+          BRANCH="changelog/auto-$(date -u +%Y-%m-%d)"
+          echo "name=${BRANCH}" >> "$GITHUB_OUTPUT"
+          git checkout -b "${BRANCH}"
+
+      - name: Determine date range
+        id: dates
+        run: .github/workflows/scripts/changelog-dates.sh
+
+      - name: Fetch merged PRs since last entry
+        id: prs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LAST_DATE: ${{ steps.dates.outputs.last_date }}
+        run: .github/workflows/scripts/changelog-fetch-prs.sh
+
+      - name: Update changelog with Claude
+        if: steps.prs.outputs.pr_count != '0'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --dangerously-skip-permissions
+            --model opus
+            --max-turns 20
+          prompt: |
+            You are maintaining a user-facing product changelog. Read these first:
+            - ${{ env.CHANGELOG_FILE }} (the current changelog; it may not exist yet)
+            - ${{ env.PR_JSON_FILE }} (PRs merged since the last changelog entry)
+
+            ## Your task
+
+            1. Read the current changelog to learn its format. If it does not
+               exist, create it in the Keep-a-Changelog style with a short header:
+
+                   # Changelog
+
+                   All notable user-facing changes to this project are documented here.
+                   The format is based on Keep a Changelog (https://keepachangelog.com).
+
+            2. Read the merged PRs JSON. Each PR has: number, title, body, mergedAt.
+            3. Identify which PRs contain USER-FACING changes. Skip:
+               - Refactors, CI/CD changes, test-only changes, dependency bumps
+               - Internal tooling and documentation-only PRs
+               - Anything not visible to an end user
+            4. Group the user-facing changes by date (use the UTC date from mergedAt).
+            5. For each date, categorize changes under New / Improved / Fixed:
+               - New       — brand-new capabilities or features
+               - Improved  — enhancements to existing behavior
+               - Fixed     — bug fixes
+            6. Write entries in plain, user-focused language: concise, non-technical.
+               No PR numbers, no component or file names, no code references.
+            7. Insert new dated sections into ${{ env.CHANGELOG_FILE }}, newest-first,
+               below the header. Use this shape:
+
+                   ## 2025-01-15
+
+                   ### New
+                   - Short description of a new capability.
+
+                   ### Improved
+                   - Short description of an improvement.
+
+                   ### Fixed
+                   - Short description of a fix.
+
+               Omit any subsection (New / Improved / Fixed) that has no items.
+            8. Do NOT duplicate entries for a date already present — only add new
+               dated sections, or append genuinely new items to an existing date.
+            9. If there are no user-facing changes, do not modify the file.
+
+            ## Important rules
+            - All dates in YYYY-MM-DD format (ISO 8601), UTC timezone.
+            - Do NOT remove or modify existing changelog entries.
+            - Write for humans, not developers.
+
+      - name: Check for changes
+        if: steps.prs.outputs.pr_count != '0'
+        id: changes
+        run: |
+          if git diff --quiet -- "${CHANGELOG_FILE}"; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit changelog and open pull request
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_PAT || github.token }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: .github/workflows/scripts/changelog-commit.sh
+
+      # Notify on failure. This generic placeholder just annotates the run.
+      # To send to Slack instead, replace this step with a guarded step like:
+      #   - name: Notify Slack on failure
+      #     if: failure() && github.ref == 'refs/heads/main' && env.SLACK_WEBHOOK != ''
+      #     env:
+      #       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      #     uses: slackapi/slack-github-action@v3.0.2
+      #     with:
+      #       webhook: ${{ secrets.SLACK_WEBHOOK }}
+      #       webhook-type: incoming-webhook
+      #       payload: |
+      #         text: ":rotating_light: Changelog update failed"
+      - name: Notify on failure
+        if: failure() && github.ref == format('refs/heads/{0}', env.BASE_BRANCH)
+        run: |
+          echo "::warning::Changelog update workflow failed on ${{ github.ref_name }} (trigger: ${{ github.event_name }})."
+          echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
