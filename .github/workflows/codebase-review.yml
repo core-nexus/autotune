@@ -9,8 +9,9 @@ name: Automated Codebase Review
 # Manual: workflow_dispatch to run any single area or all areas on demand.
 
 on:
-  schedule:
-    - cron: '0 6 * * 0'  # Every Sunday at 06:00 UTC
+  # commented out so that this exaple workflow doesn't run automatically
+  # schedule:
+  #   - cron: '0 6 * * 0'  # Every Sunday at 06:00 UTC
   workflow_dispatch:
     inputs:
       review_area:
