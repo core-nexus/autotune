@@ -51,7 +51,12 @@ on:
         type: string
 
 concurrency:
-  # Never run two triage jobs for the same Sentry issue in parallel.
+  # Per-shortId only. We deliberately do NOT serialize across shortIds: Sentry
+  # can split one underlying bug into several issues with different shortIds,
+  # each firing its own triage run. Serializing all of them would drop all but
+  # the most recent. Instead, cross-shortId duplicates are caught by the two
+  # semantic-dedup steps in the Claude prompt below (one at the start, one
+  # re-checked just before pushing).
   group: sentry-triage-${{ github.event.client_payload.shortId || inputs.shortId }}
   cancel-in-progress: false
 
@@ -170,32 +175,77 @@ jobs:
 
             ## Your job
 
-            1. **Understand the bug.**
-               a. Read `.sentry-triage/payload.json` fully.
-               b. Use the Sentry MCP server to fetch the full latest event for
-                  this issue. The payload usually includes `latestEventId` and
-                  a Sentry API URL. Get the full stacktrace, breadcrumbs,
-                  request data, tags, and contexts. Sentry's summary is often
-                  thin — always pull the full event.
+            1. **Check for an existing fix already in flight.** Do this BEFORE
+               diving into the full Sentry event — it's the cheapest dedup step.
+               a. Read `.sentry-triage/payload.json` and form a one-line mental
+                  model of the bug: the exception type/value, the top in-app
+                  frame (file + function), and which module is implicated.
+               b. List currently-open triage PRs — the ones whose head branch
+                  starts with `sentry-fix/`:
+                  `gh pr list --repo "${{ github.repository }}" --state open --limit 100 --json number,title,headRefName,body --jq '[.[] | select(.headRefName | startswith("sentry-fix/"))]'`
+               c. The dedup gate above already skipped this run if a PR for THIS
+                  exact shortId exists (open or closed). This step catches the
+                  other case: Sentry split one underlying bug into multiple
+                  issues with different shortIds, each firing its own triage run.
+                  Compare the in-flight PRs against the bug you just sketched —
+                  matching file paths, function names, error class, or
+                  stack-frame fingerprint are strong signals. For any PR that
+                  looks plausibly related, `gh pr view <number>` (or
+                  `gh pr diff <number>`) to confirm what it actually changes.
+               d. If any open PR clearly addresses the same root cause, post a
+                  short comment on this Sentry issue via the MCP — e.g.
+                  "Already being addressed in ${{ github.repository }}#<number>" —
+                  and STOP. Do NOT create a branch. Do NOT open another PR.
+               e. If no open PR matches, continue.
+
+            2. **Understand the bug.**
+               a. `payload.json` is the AUTHORITATIVE source for the issue's
+                  blast-radius numbers — they ride along in the dispatch so they
+                  are available even when the Sentry MCP is down. Read these
+                  fields straight from the file and use them as your source of
+                  record: `count` (total event frequency), `userCount` (affected
+                  users), `firstSeen` and `lastSeen` (ISO-8601), plus `release`,
+                  `environment`, `topFrames`, `breadcrumbs`, and `tags`. Do NOT
+                  reach for the MCP just to obtain these — they are already here.
+               b. Use the Sentry MCP server (tool prefix `mcp__sentry__*`) to
+                  ENRICH that picture: fetch the full latest event for this issue
+                  (the payload usually includes `latestEventId` and a Sentry API
+                  URL) for the full stacktrace, request data, and contexts, and
+                  to refine the blast-radius numbers. The MCP is enrichment only
+                  — if it is unavailable, fall back to the numbers already in
+                  `payload.json` rather than reporting them as missing.
                c. If useful, query Sentry for recent events on the same issue,
                   related issues, and the release where `firstSeen` landed.
-               d. Read the source code at every in-app frame in the stack
-                  trace. Don't guess — open the files and read the surrounding
-                  logic.
+               d. Read the source code at every in-app frame in the stack trace.
+                  Don't guess — open the files and read the surrounding logic.
 
-            2. **Decide whether to fix.** Some issues are not worth a PR:
+            3. **Decide whether to fix.** Some issues are not worth a PR:
                - Third-party / browser-extension noise (frames entirely outside
                  our code, unknown globals, browser-version-specific quirks).
                - One-shot events with no reproduction path and no in-app frames.
                - Issues whose root cause is outside this repo (infrastructure,
                  network, upstream API).
 
+               **Default to fail-loud.** Your default disposition is to FIX THE
+               ROOT CAUSE and keep the alert — not to silence it. Suppressing the
+               report — a `beforeSend` filter, a new entry in an expected-error
+               allowlist, or a "return a sentinel instead of throwing" refactor —
+               is the RARE exception. It is valid only when the condition is
+               genuinely benign and non-actionable: an expected, recovered,
+               per-user business outcome, or third-party noise as listed above. It
+               is NEVER the right answer for a misconfiguration, a missing/unset
+               environment variable, or an unconfigured admin surface — those MUST
+               stay loud so the team notices and fixes the config. When in doubt,
+               treat it as a real bug and keep it loud. If you conclude suppression
+               is genuinely warranted, say so explicitly in the PR body and
+               justify why the condition is benign.
+
                If you decide NOT to fix: post a short comment on the Sentry
                issue via the MCP explaining why (one-line reason plus a
                reference to the commit/files you investigated), then STOP. Do
                not open a PR. Do not create an empty PR.
 
-            3. **If you do fix:**
+            4. **If you do fix:**
                a. Create branch `${{ steps.dedup.outputs.branch }}` from `main`.
                b. Follow TDD: write a failing test that reproduces the bug
                   first, then make it pass. Use the project's existing test
@@ -206,7 +256,18 @@ jobs:
                   and get them green before pushing.
                e. Commit with a message that references the Sentry short ID,
                   e.g. `fix(sentry): ${{ steps.dedup.outputs.short_id }} — <what broke and why>`.
-               f. Push the branch. Open a PR with title
+               f. **Re-check for an in-flight duplicate before pushing.** Parallel
+                  triage runs for sibling Sentry issues may have opened a PR for
+                  the same root cause while you were writing the fix — the step-1
+                  check can't see PRs that didn't exist yet. Re-run the same
+                  listing now:
+                  `gh pr list --repo "${{ github.repository }}" --state open --limit 100 --json number,title,headRefName,body --jq '[.[] | select(.headRefName | startswith("sentry-fix/"))]'`
+                  Apply the same matching criteria as step 1. If any open PR now
+                  addresses the same root cause: do NOT push your branch, do NOT
+                  open another PR, post a Sentry comment via the MCP pointing at
+                  the surviving PR, and STOP. Your local commit is discarded —
+                  that is fine.
+               g. Push the branch. Open a PR with title
                   `fix(sentry): ${{ steps.dedup.outputs.short_id }} — <short summary>`
                   and a body with two sections, in this order:
 
@@ -218,9 +279,10 @@ jobs:
                     - **What went wrong:** the user-visible symptom and
                       blast radius (e.g. "checkout silently failed for ~30
                       logged-in Safari users; fired 1.2k times in the last
-                      24h"). Pull frequency / affected-user counts from the
-                      Sentry MCP when available; if the data isn't there,
-                      say so rather than guessing.
+                      24h"). Use the `count` / `userCount` / `firstSeen` /
+                      `lastSeen` numbers from `payload.json` (refined by the
+                      Sentry MCP if available) — they're always present in the
+                      dispatch, so don't report the blast radius as unknown.
                     - **What was fixed:** the behavioural change in plain
                       English, not a list of file names.
                     - **Risk:** an honest, concrete assessment of residual
@@ -239,7 +301,7 @@ jobs:
                     - `Closes Sentry: ${{ steps.dedup.outputs.short_id }}`
 
                   Mark the PR ready for review (not draft).
-               g. Watch CI. If checks fail, read the logs, push fixes as new
+               h. Watch CI. If checks fail, read the logs, push fixes as new
                   commits (never amend, never force-push), and iterate until
                   CI is green.
 
