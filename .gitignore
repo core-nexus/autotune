@@ -1,0 +1,8 @@
+# AI agent worktrees (see AGENTS.md → "Work in a git worktree")
+.claude/worktrees/
+
+# OS / editor cruft
+.DS_Store
+
+# Node
+node_modules/
