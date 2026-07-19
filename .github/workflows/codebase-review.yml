@@ -37,6 +37,13 @@ concurrency:
   group: codebase-review-${{ inputs.review_area || github.run_id }}
   cancel-in-progress: false
 
+# MAXIMUM_FIX_PRIORITY is the MINIMUM review severity at which the fix stage
+# runs automatically. Findings below it are left in the review issue for a
+# human. Valid values: HIGH, MEDIUM, LOW, XLOW. Default MEDIUM = auto-fix real
+# issues but leave minor/LOW findings for human judgment.
+env:
+  MAXIMUM_FIX_PRIORITY: MEDIUM
+
 jobs:
   # ─── Determine which review area(s) to run ─────────────────────────────────
   determine-area:
@@ -71,6 +78,8 @@ jobs:
         area: ${{ fromJson(needs.determine-area.outputs.areas_json) }}
     outputs:
       priority: ${{ steps.extract-priority.outputs.priority }}
+      should_fix: ${{ steps.extract-priority.outputs.should_fix }}
+      threshold: ${{ steps.extract-priority.outputs.threshold }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -171,15 +180,16 @@ jobs:
           REVIEW_AREA: ${{ matrix.area }}
           EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
           REPO: ${{ github.repository }}
+          MAXIMUM_FIX_PRIORITY: ${{ env.MAXIMUM_FIX_PRIORITY }}
         run: .github/workflows/scripts/extract-review-priority.sh
 
-  # ─── Stage 2: Fix (only if review found MEDIUM+ priority issues) ───────────
+  # ─── Stage 2: Fix (only if the review cleared MAXIMUM_FIX_PRIORITY) ─────────
   fix:
     needs: [determine-area, review]
     if: |
       always() &&
       needs.review.result == 'success' &&
-      (needs.review.outputs.priority == 'HIGH' || needs.review.outputs.priority == 'MEDIUM')
+      needs.review.outputs.should_fix == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
