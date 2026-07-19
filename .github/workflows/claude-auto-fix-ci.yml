@@ -1,0 +1,222 @@
+name: Claude Auto Fix CI
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT THIS DOES
+#   When a CI workflow finishes with a FAILURE on a pull request, this workflow
+#   checks out the PR branch, feeds the failed job logs to Claude Code, and lets
+#   Claude push a fix commit back to the PR branch. It then loops (via the next
+#   CI run) until CI is green or the loop-breaker trips.
+#
+# ⚠️  SHIPPED DISABLED — OPT-IN REQUIRED
+#   This workflow self-pushes commits to your PR branches when it runs. That is
+#   powerful and a little risky, so it does NOTHING until a maintainer opts in.
+#   The real `workflow_run` trigger below is live, but the job is gated behind a
+#   repository variable. To ENABLE it:
+#
+#     1. Set the repo variable ENABLE_AUTO_FIX_CI = true
+#        (Settings → Secrets and variables → Actions → Variables → New variable)
+#     2. Edit the `workflows:` list under `on.workflow_run` (below) so it names
+#        YOUR CI workflow(s) exactly — the `name:` field at the top of your CI
+#        workflow file, NOT the filename. It ships as ['CI'] as a placeholder.
+#
+#   To DISABLE again, delete/unset the ENABLE_AUTO_FIX_CI variable (or set it to
+#   anything other than 'true'). No file edit required.
+#
+# 🔁 LOOP-BREAKER
+#   To stop Claude from fighting CI forever, every fix commit is tagged with the
+#   marker "[auto-fix-ci]" in its message. Before doing anything, the job counts
+#   how many of the recent commits carry that marker; once MAX_AUTO_FIXES (5) is
+#   reached it aborts and asks for a human. This caps the blast radius per branch.
+#
+# 🔐 REQUIRED SECRETS
+#   - CLAUDE_CODE_OAUTH_TOKEN  (preferred; uses Claude Code plan credits)
+#     Alternatively, uncomment `anthropic_api_key` below to use ANTHROPIC_API_KEY.
+#
+# ⚠️  SELF-PUSH RISK
+#   With `contents: write` this workflow pushes commits authored by an automated
+#   agent straight to the PR head branch. It only ever pushes NEW commits (never
+#   amends, never force-pushes) and refuses to push to the default branch. Even
+#   so, review Claude's fix commits like any other change before merging.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_run:
+    # ⚠️  Change 'CI' to the `name:` of the CI workflow you want to auto-fix.
+    # This must be the workflow's display name, not its filename. You can list
+    # several: ['CI', 'Tests', 'Lint'].
+    workflows: ['CI']
+    types:
+      - completed
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # push fix commits to the PR branch
+  pull-requests: write
+  actions: read # read the failed run's job logs
+  id-token: write
+
+jobs:
+  auto-fix:
+    # Opt-in gate + real-failure gate. The job runs ONLY when:
+    #   - the repo variable ENABLE_AUTO_FIX_CI is exactly 'true' (opt-in), AND
+    #   - the triggering CI run concluded in 'failure' (this already excludes
+    #     'cancelled', 'skipped', 'timed_out', and superseded runs), AND
+    #   - the run is attached to a pull request.
+    if: |
+      vars.ENABLE_AUTO_FIX_CI == 'true' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.pull_requests[0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup git identity
+        run: |
+          git config --global user.email "claude[bot]@users.noreply.github.com"
+          git config --global user.name "claude[bot]"
+
+      - name: Refuse to run on the default branch
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "${HEAD_BRANCH}" = "${DEFAULT_BRANCH}" ]; then
+            echo "::error::Refusing to auto-fix the default branch (${DEFAULT_BRANCH})."
+            exit 1
+          fi
+
+      - name: Loop-breaker check
+        id: loop_check
+        env:
+          # How many auto-fix commits are allowed on a branch before we give up.
+          MAX_AUTO_FIXES: '5'
+          # Marker written into every auto-fix commit message (see prompt below).
+          FIX_MARKER: '[auto-fix-ci]'
+        run: |
+          set -euo pipefail
+          # Count how many of the recent commits are auto-fix commits.
+          FIX_COUNT=$(git log -n 20 --format='%s%n%b' | grep -c -F "${FIX_MARKER}" || true)
+          echo "Auto-fix commits found in recent history: ${FIX_COUNT} (cap: ${MAX_AUTO_FIXES})"
+          if [ "${FIX_COUNT}" -ge "${MAX_AUTO_FIXES}" ]; then
+            echo "should_abort=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_abort=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abort if loop cap reached
+        if: steps.loop_check.outputs.should_abort == 'true'
+        run: |
+          echo "::error::Auto-fix has already made the maximum number of attempts on this branch. Stopping to avoid an infinite fix loop — manual intervention required."
+          exit 1
+
+      - name: Gather CI failure details
+        id: failure_details
+        if: steps.loop_check.outputs.should_abort == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run_id = context.payload.workflow_run.id;
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id,
+            });
+
+            const jobs = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id,
+            });
+
+            const failedJobs = jobs.data.jobs.filter(job => job.conclusion === 'failure');
+
+            const errorLogs = [];
+            for (const job of failedJobs) {
+              try {
+                const logs = await github.rest.actions.downloadJobLogsForWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  job_id: job.id,
+                });
+                errorLogs.push({ jobName: job.name, logs: String(logs.data).slice(-20000) });
+              } catch (e) {
+                errorLogs.push({ jobName: job.name, logs: `Could not download logs: ${e.message}` });
+              }
+            }
+
+            return {
+              runUrl: run.data.html_url,
+              failedJobs: failedJobs.map(j => j.name),
+              errorLogs,
+            };
+
+      - name: Fix CI failures with Claude
+        id: claude
+        if: steps.loop_check.outputs.should_abort == 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Authentication: OAuth token (uses Claude Code plan credits, not API credits).
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Alternative: pay-as-you-go API key. Uncomment and set the ANTHROPIC_API_KEY
+          # secret if you prefer API billing over Claude Code plan credits.
+          # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >-
+            --dangerously-skip-permissions
+            --model opus
+            --max-turns 250
+            --append-system-prompt "If a CLAUDE.md file exists at the repo root, read and internalize it before starting work. It contains the project's coding standards and conventions. Treat it as authoritative."
+          prompt: |
+            CI has failed on this pull request. Your ONLY job is to fix the
+            failing checks and push the fix as a NEW commit to the PR branch.
+
+            Branch: ${{ github.event.workflow_run.head_branch }}
+            PR Number: ${{ github.event.workflow_run.pull_requests[0].number }}
+            Failed CI Run: ${{ fromJSON(steps.failure_details.outputs.result).runUrl }}
+            Failed Jobs: ${{ join(fromJSON(steps.failure_details.outputs.result).failedJobs, ', ') }}
+
+            Error logs (tail of each failed job):
+            ${{ toJSON(fromJSON(steps.failure_details.outputs.result).errorLogs) }}
+
+            Instructions:
+            1. Analyze the error logs to understand exactly what failed.
+            2. Fix the underlying issue in the code. Do NOT delete or skip tests
+               to make CI pass — fix the real problem.
+            3. Run the project's lint / type-check / test commands locally to
+               confirm your fix before pushing.
+            4. Commit your fix and push it to the EXISTING branch
+               "${{ github.event.workflow_run.head_branch }}".
+               - Push NEW commits only. NEVER amend or force-push.
+               - Do NOT create a new branch or a new PR.
+               - Prefix EVERY commit message with the marker "[auto-fix-ci]" so
+                 the loop-breaker can count fix attempts, e.g.:
+                   [auto-fix-ci] fix type error in user handler
+            5. If you cannot confidently fix the failure, stop and explain why in
+               a PR comment instead of pushing a speculative change.
+
+      # Fallback: if Claude left uncommitted changes, commit + push them with the
+      # loop-breaker marker so they are counted. New commit only — no force-push.
+      - name: Commit and push any remaining changes
+        if: steps.loop_check.outputs.should_abort == 'false'
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "[auto-fix-ci] chore: auto-fix CI failures
+
+            Co-Authored-By: Claude <claude[bot]@users.noreply.github.com>"
+            git push origin "HEAD:${HEAD_BRANCH}"
+            echo "Pushed remaining uncommitted changes."
+          else
+            echo "No uncommitted changes to push."
+          fi
