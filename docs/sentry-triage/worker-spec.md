@@ -113,10 +113,10 @@ type Normalized = {
   platform: string // "javascript", "node", etc.
   environment: string | null
   release: string | null
-  firstSeen: string | null // ISO-8601
-  lastSeen: string | null
-  count: number | null
-  userCount: number | null
+  firstSeen: string | null // ISO-8601 — blast-radius (see note below)
+  lastSeen: string | null // ISO-8601 — blast-radius
+  count: number | null // total event frequency — blast-radius
+  userCount: number | null // affected users — blast-radius
   issueType: string | null // e.g. "error"
   issueCategory: string | null
   sentryIssueUrl: string // human URL for the issue
@@ -182,6 +182,16 @@ Drop without dispatching (respond 200 with a `filtered` status) if any of:
   TTL AND `trigger !== 'regressed'`. Regressions always pass through.
 
 Every drop is logged with the reason so the filters can be tuned.
+
+> **Scope of the Worker's dedup.** The KV guard keys on the exact
+> `(projectSlug, shortId)`, so it only stops the *same* Sentry issue from
+> re-dispatching. When Sentry splits one underlying bug into several issues with
+> *different* shortIds, each still dispatches — that's intentional. Catching those
+> semantic duplicates requires comparing stack fingerprints against in-flight
+> fix PRs, which is the triage agent's job downstream, not the Worker's. The
+> Worker's role is to carry enough context (including the `count` / `userCount` /
+> `firstSeen` / `lastSeen` blast-radius fields above) for the agent to make that
+> call authoritatively even when the Sentry MCP is unavailable.
 
 ## Routing
 

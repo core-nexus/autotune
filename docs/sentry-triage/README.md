@@ -34,16 +34,26 @@ Issue alert rule    ──webhook──►     sentry-triage Worker  ──dispa
     once / 30d / issue
 ```
 
-Three dedup layers stacked so a firehose issue never re-triggers:
+Four dedup layers stacked so a firehose issue never re-triggers:
 
 | Layer | Where                             | Behaviour                                                                                                                                                                                                      |
 | ----- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Sentry alert rule action interval | Will not re-fire the webhook for the same `(issue, rule)` inside the interval (default: 30 days).                                                                                                              |
 | 2     | Worker KV                         | Short-term guard (24h) keyed on `<project>:<shortId>`. Belt-and-suspenders in case Sentry dedup misbehaves or two overlapping rules fire.                                                                      |
-| 3     | GitHub workflow                   | `gh pr list --search "sentry-fix/<shortId>"` — skip if any matching open **or** closed PR exists. A merged PR means we've already fixed it; a closed-unmerged one means we consciously gave up, do not re-try. |
+| 3     | GitHub workflow (exact shortId)   | `gh pr list --search "sentry-fix/<shortId>"` — skip if any matching open **or** closed PR exists. A merged PR means we've already fixed it; a closed-unmerged one means we consciously gave up, do not re-try. |
+| 4     | Claude prompt (semantic)          | Layers 1–3 key on the exact `shortId`, but Sentry often splits one underlying bug into several issues with *different* shortIds. The triage agent compares the current bug against every open `sentry-fix/*` PR (file paths, function names, error class, stack-frame fingerprint) at the start of the run **and again just before pushing** — if a sibling PR already addresses the same root cause, it comments and stops instead of opening a duplicate. |
 
 Regressions bypass layer 2 (a previously-fixed issue firing again is
 exactly the signal we want to re-run on).
+
+### Blast-radius numbers travel in the dispatch
+
+The dispatched payload carries the issue's blast-radius fields — `count` (total
+event frequency), `userCount` (affected users), `firstSeen`, and `lastSeen` — so
+the triage agent has them even when the Sentry MCP is unavailable. The payload is
+the **authoritative** source for these numbers; the MCP is used only to enrich
+(full stacktrace, per-day/per-release breakdowns), with graceful fallback to the
+payload values.
 
 ## Files in this folder
 
