@@ -5,6 +5,27 @@
 Deep audit of code quality, type safety, adherence to project conventions,
 and maintainability across the codebase.
 
+## Mechanically Enforced Metrics (Read First)
+
+If the project enforces complexity/size limits in its linter (e.g. ESLint
+`complexity`, `sonarjs/cognitive-complexity`, `max-lines-per-function`,
+`max-depth`, `max-params`, `max-nested-callbacks`, or equivalents) at the
+ecosystem-recommended maxima — with no grandfather list and no per-file
+suppression — that changes what this review should focus on:
+
+1. **Don't re-report what the linter already blocks.** Over-threshold code
+   can't merge, so flagging "this function is too long/complex" is redundant.
+   Spend attention on what the linter can't see: duplicated logic, poor names,
+   wrong abstraction layer, business logic in components.
+2. **Watch for metric-gaming.** A function refactored to slip just under a
+   threshold via dense one-liners, or an `eslint-disable` comment dodging a
+   metric rule, is a finding — the goal is readability, not a green number.
+   Flag any `eslint-disable` of `complexity`, `cognitive-complexity`,
+   `max-lines-per-function`, `max-depth`, or `max-params`.
+3. Beyond cyclomatic complexity, reason about **cognitive complexity** (deeply
+   nested control flow that is hard for the next reader — human or model — to
+   follow) even when a function is under the cyclomatic limit.
+
 ## Review Checklist
 
 ### Type Safety

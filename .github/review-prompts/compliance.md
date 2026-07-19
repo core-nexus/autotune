@@ -35,6 +35,11 @@ GDPR (EU), CCPA/CPRA (California), and emerging global privacy laws.
 - [ ] Default settings are the most privacy-protective option
 - [ ] Data fields use pseudonymization where possible
 
+#### Records of Processing (Art. 30)
+
+- [ ] Processing activities are documented (even if informally in code comments)
+- [ ] Data flows to third parties are documented
+
 #### International Data Transfers (Art. 44-49)
 
 - [ ] Identify where data is stored and processed geographically
@@ -56,17 +61,29 @@ GDPR (EU), CCPA/CPRA (California), and emerging global privacy laws.
 - [ ] Essential vs non-essential cookies are distinguished
 - [ ] Third-party cookies are identified and consent-gated
 - [ ] Local storage used for tracking purposes is treated as cookies
+- [ ] Do Not Track (DNT) header is respected or documented as not supported
 
 ### Children's Privacy (COPPA / Age Gates)
 
 - [ ] Age verification or gate exists if platform is accessible to minors
 - [ ] If users under 13 (or 16 in EU) can sign up, special handling exists
+- [ ] Parental consent mechanisms if applicable
 
 ### Privacy Policy Alignment
 
 - [ ] Code behavior matches what the privacy policy promises
 - [ ] New data collection not yet reflected in privacy policy is flagged
 - [ ] Data retention in code matches stated retention periods
+
+## Emerging Regulations to Watch
+
+Flag if the codebase has potential issues with:
+
+- Brazil LGPD
+- India DPDP Act
+- UK Data Protection Act 2018
+- Canada PIPEDA
+- State-level US laws (Virginia VCDPA, Colorado CPA, Connecticut CTDPA)
 
 ## Severity Guide
 
