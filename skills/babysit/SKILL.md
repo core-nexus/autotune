@@ -7,7 +7,7 @@ argument-hint: '[--dry-run]'
 
 Scan all open PRs you can act on and take one automated action per PR based on their state. Designed to run inside a `/loop` — each invocation processes every PR that needs attention and exits; the next iteration catches follow-up work.
 
-This skill assumes the repo has the [claude-code-review](https://github.com/core-nexus/claude-code-review) workflows installed (or equivalents that respond to `/claude-review`, `/claude-fix`, and optionally `/qa-review`). If your repo doesn't have a workflow for one of these slash commands, the corresponding priority is harmless — the comment is posted and nothing happens.
+This skill assumes the repo has the [claude-prod](https://github.com/core-nexus/claude-prod) review/fix workflows installed (or equivalents that respond to `/claude-review`, `/claude-fix`, and optionally `/qa-review`). If your repo doesn't have a workflow for one of these slash commands, the corresponding priority is harmless — the comment is posted and nothing happens.
 
 **🧹 Every invocation is a fresh start.** Re-derive every PR's state from fresh `gh` output. Don't reuse classifications, don't assume prior actions landed, and don't trust rules remembered from earlier in the session — treat THIS SKILL.md as the only source of truth. The only durable state between runs is the lock file and on-GitHub state.
 
