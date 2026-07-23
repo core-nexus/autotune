@@ -22,10 +22,10 @@ concurrency:
 
 # MAXIMUM_FIX_PRIORITY is the MINIMUM review severity at which the fix stage
 # runs automatically. Findings below it are left for a human (or a manual
-# /claude-fix). Valid values: HIGH, MEDIUM, LOW, XLOW. Default LOW = fix
-# anything worth fixing; raise to MEDIUM/HIGH to auto-fix only the serious stuff.
+# /claude-fix). Valid values: HIGH, MEDIUM, LOW, XLOW. Default MEDIUM = auto-fix
+# real issues but leave minor/LOW findings for human judgment.
 env:
-  MAXIMUM_FIX_PRIORITY: LOW
+  MAXIMUM_FIX_PRIORITY: MEDIUM
 
 jobs:
   # ─── Stage 1: Review ───────────────────────────────────────────────────────
@@ -260,6 +260,6 @@ jobs:
 
             ## REMINDER — SUCCESS CRITERIA (ALL THREE REQUIRED)
 
-            1. You read the review and fixed every finding rated LOW or above
+            1. You read the review and fixed every finding rated at or above ${{ env.MAXIMUM_FIX_PRIORITY }}
             2. You pushed code fixes (not reviews or comments)
             3. ALL CI checks are green
