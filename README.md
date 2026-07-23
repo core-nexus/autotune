@@ -132,7 +132,7 @@ into this repository:
 ### PR Review — `claude-pr-review.yml`
 
 Reviews every PR on open / ready-for-review, then auto-fixes findings at or above
-`MAXIMUM_FIX_PRIORITY` (default `LOW`). Comment `/claude-review` to re-review or
+`MAXIMUM_FIX_PRIORITY` (default `MEDIUM`). Comment `/claude-review` to re-review or
 `/claude-fix` to force a fix pass. The fix stage pushes commits to the PR branch
 and monitors CI until green. Docs/text-only PRs are skipped.
 
@@ -204,7 +204,7 @@ gets auto-fixed versus left for a human:
 |---|---|---|
 | NONE | Clean, no issues | No |
 | XLOW | Trivial nits | No |
-| LOW | Minor issues | PR review: yes · Codebase review: no |
+| LOW | Minor issues | No |
 | MEDIUM | Real issues | Yes |
 | HIGH | Critical issues | Yes |
 
